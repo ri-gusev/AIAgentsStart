@@ -5,6 +5,14 @@
 #include <iostream>
 #include <string>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 static size_t writeResponse(void* data, size_t size, size_t count, void* userData) {
     static_cast<std::string*>(userData)->append(static_cast<char*>(data), size * count);
     return size * count;
@@ -28,6 +36,26 @@ static std::string jsonEscape(const std::string& text) {
     }
     return result;
 }
+
+#ifdef _WIN32
+static std::string argvToUtf8(const char* text) {
+    if (!text || !*text) return {};
+
+    const int wideSize = MultiByteToWideChar(CP_ACP, 0, text, -1, nullptr, 0);
+    if (wideSize <= 1) return {};
+
+    std::wstring wide(static_cast<size_t>(wideSize), L'\0');
+    MultiByteToWideChar(CP_ACP, 0, text, -1, wide.data(), wideSize);
+
+    const int utf8Size = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (utf8Size <= 1) return {};
+
+    std::string result(static_cast<size_t>(utf8Size), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, result.data(), utf8Size, nullptr, nullptr);
+    result.pop_back();
+    return result;
+}
+#endif
 
 static std::string extractContent(const std::string& json) {
     const auto message = json.find("\"message\"");
@@ -63,14 +91,25 @@ static std::string extractContent(const std::string& json) {
 }
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    SetConsoleCP(CP_UTF8);
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+
     const char* apiKey = std::getenv("OPENAI_API_KEY");
     if (!apiKey || !*apiKey) {
         std::cerr << "OPENAI_API_KEY is not set\n";
         return 1;
     }
 
-    std::string prompt = argc > 1 ? argv[1] : "Say hello in one short sentence.";
+    std::string prompt = "Say hello in one short sentence.";
+#ifdef _WIN32
+    if (argc > 1) prompt = argvToUtf8(argv[1]);
+    for (int i = 2; i < argc; ++i) prompt += " " + argvToUtf8(argv[i]);
+#else
+    if (argc > 1) prompt = argv[1];
     for (int i = 2; i < argc; ++i) prompt += " " + std::string(argv[i]);
+#endif
 
     std::string response;
     const std::string body =
