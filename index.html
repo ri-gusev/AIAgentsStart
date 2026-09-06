@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Circuit AI</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <aside class="rail">
+      <div class="mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <p class="eyebrow">LOCAL / 8080</p>
+      <h1>Circuit<br>AI</h1>
+      <p class="intro">Ваш собеседник для быстрых вопросов об электронике и не только.</p>
+      <div class="connection"><i></i><span>C++ backend активен</span></div>
+      <p class="security">API-ключ остается на локальном сервере и никогда не передается браузеру.</p>
+    </aside>
+
+    <section class="chat" aria-label="Чат с нейросетью">
+      <header class="chat-header">
+        <div>
+          <p class="eyebrow">НОВЫЙ ДИАЛОГ</p>
+          <h2>Спросите что угодно</h2>
+        </div>
+        <button class="clear" id="clearButton" type="button" title="Очистить чат">Очистить</button>
+      </header>
+
+      <div class="messages" id="messages" aria-live="polite">
+        <article class="message assistant welcome">
+          <div class="avatar">AI</div>
+          <div class="bubble">
+            <p>Привет. Я готов помочь разобраться с вопросом.</p>
+            <div class="suggestions">
+              <button type="button">Как работает транзистор?</button>
+              <button type="button">Что такое ESP32?</button>
+              <button type="button">Объясни закон Ома</button>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <form class="composer" id="chatForm">
+        <textarea id="messageInput" rows="1" maxlength="4000" placeholder="Введите сообщение..." aria-label="Сообщение"></textarea>
+        <button class="send" id="sendButton" type="submit" aria-label="Отправить">
+          <span>Отправить</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+        </button>
+      </form>
+      <p class="hint">Enter отправляет · Shift + Enter переносит строку</p>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

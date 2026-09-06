@@ -1,28 +1,27 @@
 {
+    "version": "2.0.0",
     "tasks": [
         {
-            "type": "cppbuild",
-            "label": "C/C++: gcc.exe сборка активного файла",
-            "command": "C:\\msys64\\ucrt64\\bin\\gcc.exe",
+            "label": "Build OpenAI Web Chat",
+            "type": "process",
+            "command": "C:\\msys64\\ucrt64\\bin\\g++.exe",
             "args": [
-                "-fdiagnostics-color=always",
+                "-std=c++17",
                 "-g",
-                "${file}",
+                "${workspaceFolder}\\main.cpp",
                 "-o",
-                "${fileDirname}\\${fileBasenameNoExtension}.exe"
+                "${workspaceFolder}\\main.exe",
+                "-lcurl",
+                "-lws2_32"
             ],
             "options": {
-                "cwd": "${fileDirname}"
+                "cwd": "${workspaceFolder}"
             },
-            "problemMatcher": [
-                "$gcc"
-            ],
+            "problemMatcher": ["$gcc"],
             "group": {
                 "kind": "build",
                 "isDefault": true
-            },
-            "detail": "Задача создана отладчиком."
+            }
         }
-    ],
-    "version": "2.0.0"
+    ]
 }

@@ -7,3 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(CURL REQUIRED)
 add_executable(openai_cli main.cpp)
 target_link_libraries(openai_cli PRIVATE CURL::libcurl)
+
+if(WIN32)
+    target_link_libraries(openai_cli PRIVATE ws2_32)
+endif()
