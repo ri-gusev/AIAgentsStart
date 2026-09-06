@@ -91,12 +91,13 @@ static std::string extractContent(const std::string& json) {
     return result;
 }
 
-static bool askOpenAI(const char* apiKey, const std::string& prompt,
+static bool askOpenAI(const char* apiKey, const std::string& prompt, double temperature,
                       std::string& answer, std::string& error) {
     std::string response;
     const std::string body =
-        "{\"model\":\"gpt-5.6-luna\",\"messages\":[{\"role\":\"user\",\"content\":\"" +
-        jsonEscape(prompt) + "\"}]}";
+        "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"" +
+        jsonEscape(prompt) + "\"}],\"temperature\":" + std::to_string(temperature) +
+        ",\"max_completion_tokens\":200}";
 
     CURL* curl = curl_easy_init();
     if (!curl) {
@@ -111,13 +112,19 @@ static bool askOpenAI(const char* apiKey, const std::string& prompt,
     curl_easy_setopt(curl, CURLOPT_URL, "https://api.openai.com/v1/chat/completions");
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeResponse);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
 
-    const CURLcode result = curl_easy_perform(curl);
+    CURLcode result = CURLE_OK;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        response.clear();
+        result = curl_easy_perform(curl);
+        if (result != CURLE_OPERATION_TIMEDOUT || attempt == 1) break;
+        curl_easy_setopt(curl, CURLOPT_FRESH_CONNECT, 1L);
+    }
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     curl_slist_free_all(headers);
@@ -297,15 +304,20 @@ static int runWebServer(const char* apiKey) {
                 sendHttpResponse(client, 400, "application/json",
                                  "{\"error\":\"Message is required\"}");
             } else {
-                std::string answer;
-                std::string error;
-                if (askOpenAI(apiKey, prompt, answer, error)) {
-                    sendHttpResponse(client, 200, "application/json",
-                                     "{\"answer\":\"" + jsonEscape(answer) + "\"}");
-                } else {
-                    sendHttpResponse(client, 500, "application/json",
-                                     "{\"error\":\"" + jsonEscape(error) + "\"}");
+                std::string result = "{\"answers\":[";
+                const double temperatures[] = {0.0, 1.5, 2.0};
+                for (int i = 0; i < 3; ++i) {
+                    const double temperature = temperatures[i];
+                    std::string answer;
+                    std::string error;
+                    const bool success = askOpenAI(apiKey, prompt, temperature, answer, error);
+                    if (i > 0) result += ',';
+                    result += "{\"temperature\":" + std::to_string(temperature) +
+                              ",\"answer\":\"" + jsonEscape(success ? answer : "") +
+                              "\",\"error\":\"" + jsonEscape(success ? "" : error) + "\"}";
                 }
+                result += "]}";
+                sendHttpResponse(client, 200, "application/json", result);
             }
         } else {
             std::string fileName;
@@ -370,7 +382,7 @@ int main(int argc, char* argv[]) {
 
     std::string answer;
     std::string error;
-    const bool success = askOpenAI(apiKey, prompt, answer, error);
+    const bool success = askOpenAI(apiKey, prompt, 1, answer, error);
     curl_global_cleanup();
     if (!success) {
         std::cerr << error << '\n';

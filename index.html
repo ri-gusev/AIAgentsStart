@@ -3,51 +3,65 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Circuit AI</title>
+  <title>Temperature Lab</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <main class="shell">
-    <aside class="rail">
-      <div class="mark" aria-hidden="true"><span></span><span></span><span></span></div>
-      <p class="eyebrow">LOCAL / 8080</p>
-      <h1>Circuit<br>AI</h1>
-      <p class="intro">Ваш собеседник для быстрых вопросов об электронике и не только.</p>
-      <div class="connection"><i></i><span>C++ backend активен</span></div>
-      <p class="security">API-ключ остается на локальном сервере и никогда не передается браузеру.</p>
-    </aside>
-
-    <section class="chat" aria-label="Чат с нейросетью">
-      <header class="chat-header">
+  <main class="workspace">
+    <header class="masthead">
+      <div class="brand">
+        <span class="brand-mark">AI</span>
         <div>
-          <p class="eyebrow">НОВЫЙ ДИАЛОГ</p>
-          <h2>Спросите что угодно</h2>
+          <p>OPENAI / C++ LAB</p>
+          <h1>Temperature comparison</h1>
         </div>
-        <button class="clear" id="clearButton" type="button" title="Очистить чат">Очистить</button>
-      </header>
-
-      <div class="messages" id="messages" aria-live="polite">
-        <article class="message assistant welcome">
-          <div class="avatar">AI</div>
-          <div class="bubble">
-            <p>Привет. Я готов помочь разобраться с вопросом.</p>
-            <div class="suggestions">
-              <button type="button">Как работает транзистор?</button>
-              <button type="button">Что такое ESP32?</button>
-              <button type="button">Объясни закон Ома</button>
-            </div>
-          </div>
-        </article>
       </div>
+      <div class="status"><i></i> Local backend</div>
+    </header>
 
+    <section class="question-panel">
+      <div class="question-copy">
+        <span>ОДИН ВОПРОС</span>
+        <h2>Три характера ответа</h2>
+        <p>Сравните, как температура меняет точность, баланс и творческую свободу модели.</p>
+      </div>
       <form class="composer" id="chatForm">
-        <textarea id="messageInput" rows="1" maxlength="4000" placeholder="Введите сообщение..." aria-label="Сообщение"></textarea>
-        <button class="send" id="sendButton" type="submit" aria-label="Отправить">
-          <span>Отправить</span>
+        <textarea id="messageInput" rows="1" maxlength="4000" placeholder="Например: Что такое ESP32?" aria-label="Ваш вопрос" autofocus></textarea>
+        <button id="sendButton" type="submit">
+          <span>Сравнить</span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
         </button>
       </form>
-      <p class="hint">Enter отправляет · Shift + Enter переносит строку</p>
+      <p class="hint">Enter — отправить · Shift + Enter — новая строка</p>
+    </section>
+
+    <section class="answers" aria-live="polite">
+      <article class="answer-card precise" data-temperature="0">
+        <header>
+          <div><span class="number">01</span><h3>Точный</h3></div>
+          <span class="temperature">temperature = 0</span>
+        </header>
+        <p class="description">Предсказуемый и сфокусированный ответ.</p>
+        <div class="answer-content">Здесь появится первый ответ.</div>
+      </article>
+
+      <article class="answer-card balanced" data-temperature="1.5">
+        <header>
+          <div><span class="number">02</span><h3>Баланс</h3></div>
+          <span class="temperature">temperature = 1.5</span>
+        </header>
+        <p class="description">Естественный баланс точности и вариативности.</p>
+        <div class="answer-content">Здесь появится второй ответ.</div>
+      </article>
+
+      <article class="answer-card creative" data-temperature="2">
+        <header>
+          <div><span class="number">03</span><h3>Свободный</h3></div>
+          <span class="temperature">temperature = 2</span>
+        </header>
+        <p class="description">Максимально разнообразный и неожиданный ответ.</p>
+        <div class="answer-content">Здесь появится третий ответ.</div>
+      </article>
     </section>
   </main>
   <script src="/app.js"></script>

@@ -1,41 +1,29 @@
 const form = document.querySelector('#chatForm');
 const input = document.querySelector('#messageInput');
-const messages = document.querySelector('#messages');
 const sendButton = document.querySelector('#sendButton');
-const clearButton = document.querySelector('#clearButton');
+const cards = [...document.querySelectorAll('.answer-card')];
 
-function addMessage(text, role) {
-  const article = document.createElement('article');
-  article.className = `message ${role}`;
-
-  if (role === 'assistant') {
-    const avatar = document.createElement('div');
-    avatar.className = 'avatar';
-    avatar.textContent = 'AI';
-    article.append(avatar);
-  }
-
-  const bubble = document.createElement('div');
-  bubble.className = 'bubble';
-  bubble.textContent = text;
-  article.append(bubble);
-  messages.append(article);
-  messages.scrollTop = messages.scrollHeight;
-  return article;
+function setLoading() {
+  cards.forEach((card) => {
+    const content = card.querySelector('.answer-content');
+    content.classList.add('loading');
+    content.innerHTML = '<div class="loader" aria-label="Загрузка"><i></i><i></i><i></i></div>';
+  });
 }
 
-function addTyping() {
-  const article = document.createElement('article');
-  article.className = 'message assistant';
-  article.innerHTML = '<div class="avatar">AI</div><div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>';
-  messages.append(article);
-  messages.scrollTop = messages.scrollHeight;
-  return article;
+function showResults(answers) {
+  cards.forEach((card) => {
+    const temperature = Number(card.dataset.temperature);
+    const result = answers.find((item) => item.temperature === temperature);
+    const content = card.querySelector('.answer-content');
+    content.classList.remove('loading');
+    content.textContent = result?.answer || `Ошибка: ${result?.error || 'ответ не получен'}`;
+    content.scrollTop = 0;
+  });
 }
 
-async function sendMessage(text) {
-  addMessage(text, 'user');
-  const typing = addTyping();
+async function compareAnswers(question) {
+  setLoading();
   sendButton.disabled = true;
   input.disabled = true;
 
@@ -43,14 +31,13 @@ async function sendMessage(text) {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text })
+      body: JSON.stringify({ message: question })
     });
     const data = await response.json();
-    typing.remove();
-    addMessage(response.ok ? data.answer : `Ошибка: ${data.error || 'Не удалось получить ответ'}`, 'assistant');
-  } catch {
-    typing.remove();
-    addMessage('Не удалось связаться с локальным C++ сервером.', 'assistant');
+    if (!response.ok) throw new Error(data.error || 'Ошибка локального сервера');
+    showResults(data.answers || []);
+  } catch (error) {
+    showResults([0, 1, 2].map((temperature) => ({ temperature, error: error.message })));
   } finally {
     sendButton.disabled = false;
     input.disabled = false;
@@ -60,11 +47,8 @@ async function sendMessage(text) {
 
 form.addEventListener('submit', (event) => {
   event.preventDefault();
-  const text = input.value.trim();
-  if (!text || sendButton.disabled) return;
-  input.value = '';
-  input.style.height = 'auto';
-  sendMessage(text);
+  const question = input.value.trim();
+  if (question && !sendButton.disabled) compareAnswers(question);
 });
 
 input.addEventListener('keydown', (event) => {
@@ -76,14 +60,5 @@ input.addEventListener('keydown', (event) => {
 
 input.addEventListener('input', () => {
   input.style.height = 'auto';
-  input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
-});
-
-document.querySelectorAll('.suggestions button').forEach((button) => {
-  button.addEventListener('click', () => sendMessage(button.textContent));
-});
-
-clearButton.addEventListener('click', () => {
-  messages.querySelectorAll('.message:not(.welcome)').forEach((message) => message.remove());
-  input.focus();
+  input.style.height = `${Math.min(input.scrollHeight, 110)}px`;
 });
