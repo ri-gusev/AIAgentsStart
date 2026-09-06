@@ -13,8 +13,8 @@ function setLoading() {
 
 function showResults(answers) {
   cards.forEach((card) => {
-    const temperature = Number(card.dataset.temperature);
-    const result = answers.find((item) => item.temperature === temperature);
+    const model = card.dataset.model;
+    const result = answers.find((item) => item.model === model);
     const content = card.querySelector('.answer-content');
     content.classList.remove('loading');
     content.textContent = result?.answer || `Ошибка: ${result?.error || 'ответ не получен'}`;
@@ -37,7 +37,7 @@ async function compareAnswers(question) {
     if (!response.ok) throw new Error(data.error || 'Ошибка локального сервера');
     showResults(data.answers || []);
   } catch (error) {
-    showResults([0, 1, 2].map((temperature) => ({ temperature, error: error.message })));
+    showResults(cards.map((card) => ({ model: card.dataset.model, error: error.message })));
   } finally {
     sendButton.disabled = false;
     input.disabled = false;

@@ -91,13 +91,13 @@ static std::string extractContent(const std::string& json) {
     return result;
 }
 
-static bool askOpenAI(const char* apiKey, const std::string& prompt, double temperature,
+static bool askOpenAI(const char* apiKey, const std::string& prompt, const std::string& model,
                       std::string& answer, std::string& error) {
     std::string response;
     const std::string body =
-        "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"" +
-        jsonEscape(prompt) + "\"}],\"temperature\":" + std::to_string(temperature) +
-        ",\"max_completion_tokens\":200}";
+        "{\"model\":\"" + jsonEscape(model) +
+        "\",\"messages\":[{\"role\":\"user\",\"content\":\"" + jsonEscape(prompt) +
+        "\"}],\"max_completion_tokens\":200}";
 
     CURL* curl = curl_easy_init();
     if (!curl) {
@@ -305,15 +305,15 @@ static int runWebServer(const char* apiKey) {
                                  "{\"error\":\"Message is required\"}");
             } else {
                 std::string result = "{\"answers\":[";
-                const double temperatures[] = {0.0, 1.5, 2.0};
+                const std::string models[] = {"gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"};
                 for (int i = 0; i < 3; ++i) {
-                    const double temperature = temperatures[i];
+                    const std::string& model = models[i];
                     std::string answer;
                     std::string error;
-                    const bool success = askOpenAI(apiKey, prompt, temperature, answer, error);
+                    const bool success = askOpenAI(apiKey, prompt, model, answer, error);
                     if (i > 0) result += ',';
-                    result += "{\"temperature\":" + std::to_string(temperature) +
-                              ",\"answer\":\"" + jsonEscape(success ? answer : "") +
+                    result += "{\"model\":\"" + jsonEscape(model) +
+                              "\",\"answer\":\"" + jsonEscape(success ? answer : "") +
                               "\",\"error\":\"" + jsonEscape(success ? "" : error) + "\"}";
                 }
                 result += "]}";
@@ -382,7 +382,7 @@ int main(int argc, char* argv[]) {
 
     std::string answer;
     std::string error;
-    const bool success = askOpenAI(apiKey, prompt, 1, answer, error);
+    const bool success = askOpenAI(apiKey, prompt, "gpt-5.6-luna", answer, error);
     curl_global_cleanup();
     if (!success) {
         std::cerr << error << '\n';
