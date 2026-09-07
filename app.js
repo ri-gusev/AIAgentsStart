@@ -1,31 +1,43 @@
 const form = document.querySelector('#chatForm');
 const input = document.querySelector('#messageInput');
 const sendButton = document.querySelector('#sendButton');
-const cards = [...document.querySelectorAll('.answer-card')];
+const chatLog = document.querySelector('#chatLog');
 
-function setLoading() {
-  cards.forEach((card) => {
-    const content = card.querySelector('.answer-content');
+function scrollToLatest() {
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function addMessage(role, text = '') {
+  chatLog.querySelector('.chat-empty')?.remove();
+  const message = document.createElement('article');
+  message.className = `chat-message ${role}`;
+
+  const label = document.createElement('p');
+  label.className = 'message-role';
+  label.textContent = role === 'user' ? 'You' : 'Agent';
+
+  const content = document.createElement('div');
+  content.className = 'message-content';
+  if (role === 'loading') {
     content.classList.add('loading');
-    content.innerHTML = '<div class="loader" aria-label="Загрузка"><i></i><i></i><i></i></div>';
-  });
+    content.innerHTML = '<div class="loader" aria-label="Loading"><i></i><i></i><i></i></div>';
+  } else {
+    content.textContent = text;
+  }
+
+  message.append(label, content);
+  chatLog.append(message);
+  scrollToLatest();
+  return message;
 }
 
-function showResults(answers) {
-  cards.forEach((card) => {
-    const model = card.dataset.model;
-    const result = answers.find((item) => item.model === model);
-    const content = card.querySelector('.answer-content');
-    content.classList.remove('loading');
-    content.textContent = result?.answer || `Ошибка: ${result?.error || 'ответ не получен'}`;
-    content.scrollTop = 0;
-  });
-}
-
-async function compareAnswers(question) {
-  setLoading();
+async function askAgent(question) {
+  addMessage('user', question);
+  const pendingMessage = addMessage('loading');
   sendButton.disabled = true;
   input.disabled = true;
+  input.value = '';
+  input.style.height = 'auto';
 
   try {
     const response = await fetch('/api/chat', {
@@ -34,10 +46,20 @@ async function compareAnswers(question) {
       body: JSON.stringify({ message: question })
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Ошибка локального сервера');
-    showResults(data.answers || []);
+    if (!response.ok) throw new Error(data.error || 'Local server error');
+
+    pendingMessage.className = 'chat-message assistant';
+    pendingMessage.querySelector('.message-role').textContent = data.model || 'Agent';
+    const content = pendingMessage.querySelector('.message-content');
+    content.classList.remove('loading');
+    content.textContent = data.answer;
+    scrollToLatest();
   } catch (error) {
-    showResults(cards.map((card) => ({ model: card.dataset.model, error: error.message })));
+    pendingMessage.className = 'chat-message error';
+    pendingMessage.querySelector('.message-role').textContent = 'Error';
+    const content = pendingMessage.querySelector('.message-content');
+    content.classList.remove('loading');
+    content.textContent = error.message;
   } finally {
     sendButton.disabled = false;
     input.disabled = false;
@@ -48,7 +70,7 @@ async function compareAnswers(question) {
 form.addEventListener('submit', (event) => {
   event.preventDefault();
   const question = input.value.trim();
-  if (question && !sendButton.disabled) compareAnswers(question);
+  if (question && !sendButton.disabled) askAgent(question);
 });
 
 input.addEventListener('keydown', (event) => {

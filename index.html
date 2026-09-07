@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Temperature Lab</title>
+  <title>Agent Chat</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -13,7 +13,7 @@
         <span class="brand-mark">AI</span>
         <div>
           <p>OPENAI / C++ LAB</p>
-          <h1>Model comparison</h1>
+          <h1>Agent chat</h1>
         </div>
       </div>
       <div class="status"><i></i> Local backend</div>
@@ -21,47 +21,25 @@
 
     <section class="question-panel">
       <div class="question-copy">
-        <span>ОДИН ВОПРОС</span>
-        <h2>Три модели, один вопрос</h2>
-        <p>Сравните скорость, стиль и глубину ответов трех моделей на одинаковый запрос.</p>
+        <span>ONE AGENT</span>
+        <h2>Ask a question</h2>
+        <p>The agent keeps the last 15 dialog turns in the current session and checks each answer before returning it.</p>
       </div>
+    </section>
+
+    <section class="chat-log" id="chatLog" aria-live="polite">
+      <div class="chat-empty">Start the conversation with a question.</div>
+    </section>
+
+    <section class="composer-panel">
       <form class="composer" id="chatForm">
-        <textarea id="messageInput" rows="1" maxlength="4000" placeholder="Например: Что такое ESP32?" aria-label="Ваш вопрос" autofocus></textarea>
+        <textarea id="messageInput" rows="1" maxlength="4000" placeholder="For example: What is ESP32?" aria-label="Your question" autofocus></textarea>
         <button id="sendButton" type="submit">
-          <span>Сравнить</span>
+          <span>Send</span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
         </button>
       </form>
-      <p class="hint">Enter — отправить · Shift + Enter — новая строка</p>
-    </section>
-
-    <section class="answers" aria-live="polite">
-      <article class="answer-card precise" data-model="gpt-5.6-luna">
-        <header>
-          <div><span class="number">01</span><h3>GPT-5.6 Luna</h3></div>
-          <span class="temperature">Экономичная</span>
-        </header>
-        <p class="description">Слабая и самая дешевая модель в сравнении.</p>
-        <div class="answer-content">Здесь появится первый ответ.</div>
-      </article>
-
-      <article class="answer-card balanced" data-model="gpt-5.6-terra">
-        <header>
-          <div><span class="number">02</span><h3>GPT-5.6 Terra</h3></div>
-          <span class="temperature">Средняя</span>
-        </header>
-        <p class="description">Средняя модель с балансом качества и стоимости.</p>
-        <div class="answer-content">Здесь появится второй ответ.</div>
-      </article>
-
-      <article class="answer-card creative" data-model="gpt-5.6-sol">
-        <header>
-          <div><span class="number">03</span><h3>GPT-5.6 Sol</h3></div>
-          <span class="temperature">Сильная</span>
-        </header>
-        <p class="description">Флагманская модель для сложных вопросов.</p>
-        <div class="answer-content">Здесь появится третий ответ.</div>
-      </article>
+      <p class="hint">Enter — send · Shift + Enter — new line</p>
     </section>
   </main>
   <script src="/app.js"></script>
