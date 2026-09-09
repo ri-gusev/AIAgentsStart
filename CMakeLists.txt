@@ -5,8 +5,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(CURL REQUIRED)
-add_executable(openai_cli main.cpp agent.cpp api_client.cpp web_server.cpp)
-target_link_libraries(openai_cli PRIVATE CURL::libcurl)
+find_package(SQLite3 REQUIRED)
+add_executable(openai_cli main.cpp agent.cpp api_client.cpp web_server.cpp memory_store.cpp)
+target_link_libraries(openai_cli PRIVATE CURL::libcurl SQLite::SQLite3)
 
 if(WIN32)
     target_link_libraries(openai_cli PRIVATE ws2_32)

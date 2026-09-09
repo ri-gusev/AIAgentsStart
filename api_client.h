@@ -13,7 +13,7 @@ public:
     bool isReady() const;
     bool sendChatCompletion(const std::string& apiKey, const std::string& model,
                             const std::string& messagesJson, std::string& answer,
-                            std::string& error) const;
+                            std::string& error, bool jsonResponse = false) const;
 
 private:
     bool initialized_ = false;
