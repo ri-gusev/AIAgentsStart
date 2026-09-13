@@ -7,7 +7,7 @@
 
 namespace {
 constexpr long kRequestTimeoutSeconds = 90L;
-constexpr long kMaxCompletionTokens = 800L;
+constexpr long kMaxCompletionTokens = 1600L;
 
 size_t writeResponse(void* data, size_t size, size_t count, void* userData) {
     static_cast<std::string*>(userData)->append(static_cast<char*>(data), size * count);
@@ -202,7 +202,14 @@ bool ApiClient::sendChatCompletion(const std::string& apiKey, const std::string&
     if (usage) *usage = {};
     if (finishReason) finishReason->clear();
     if (!initialized_) { error = "Could not initialize libcurl"; return false; }
-    std::string body = "{\"model\":\"" + jsonEscape(model) + "\",\"messages\":" + messagesJson +
+    std::string requestMessages = messagesJson;
+    if (jsonResponse && !requestMessages.empty() && requestMessages.front() == '[') {
+        const std::string jsonInstruction =
+            "{\"role\":\"system\",\"content\":\"Return one valid JSON object only.\"}";
+        requestMessages.insert(1, jsonInstruction +
+                                      (requestMessages.size() > 2 ? "," : ""));
+    }
+    std::string body = "{\"model\":\"" + jsonEscape(model) + "\",\"messages\":" + requestMessages +
                        ",\"max_completion_tokens\":" + std::to_string(kMaxCompletionTokens);
     if (jsonResponse) body += ",\"response_format\":{\"type\":\"json_object\"}";
     body += '}';

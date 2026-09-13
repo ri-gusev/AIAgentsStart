@@ -23,25 +23,31 @@
       <div class="question-copy">
         <span>ONE AGENT</span>
         <h2>Ask a question</h2>
-        <p>The agent combines SQLite facts, a conversation summary, and the latest raw dialog turns.</p>
+        <p id="strategyDescription">Only the latest 10 messages are used. SQLite and summaries are disabled.</p>
       </div>
-      <aside class="memory-control" aria-label="Agent memory controls">
-        <button class="compression-toggle" id="compressionToggle" type="button" aria-pressed="false" disabled>
-          <span class="toggle-track" aria-hidden="true"><i></i></span>
-          <span class="toggle-copy">
-            <span>History compression</span>
-            <strong id="compressionMode" aria-live="polite">Loading...</strong>
-          </span>
-        </button>
+      <aside class="strategy-control" aria-label="Memory strategy controls">
+        <div class="strategy-tabs" role="tablist" aria-label="Memory strategy">
+          <button type="button" role="tab" data-strategy="1" aria-selected="false" disabled><span>1</span> Short</button>
+          <button type="button" role="tab" data-strategy="2" aria-selected="false" disabled><span>2</span> SQLite</button>
+          <button type="button" role="tab" data-strategy="3" aria-selected="false" disabled><span>3</span> Branch</button>
+        </div>
         <dl class="memory-stats" aria-live="polite">
-          <div><dt>Raw history</dt><dd><span id="rawTurns">0</span> turns</dd></div>
-          <div><dt>Summary</dt><dd id="summaryState">Empty</dd></div>
+          <div><dt>Active context</dt><dd><span id="rawMessages">0</span> messages</dd></div>
+          <div><dt>SQLite facts</dt><dd id="longTermFacts">Disabled</dd></div>
+          <div><dt>Branches</dt><dd id="branchCount">Disabled</dd></div>
           <div><dt>Input context</dt><dd><span id="contextTokens">0</span> · <span id="contextCost">$0.000000</span></dd></div>
-          <div><dt>Summary usage</dt><dd><span id="summaryTokens">0</span> · <span id="summaryCost">$0.000000</span></dd></div>
           <div><dt>All usage</dt><dd><span id="totalTokens">0</span> · <span id="totalCost">$0.000000</span></dd></div>
         </dl>
       </aside>
     </section>
+
+    <nav class="branch-bar" id="branchBar" aria-label="Conversation branches" hidden>
+      <div>
+        <strong>Checkpoint branches</strong>
+        <span id="branchHint">A choice will appear when the agent detects a real dichotomy.</span>
+      </div>
+      <div class="branch-list" id="branchList"></div>
+    </nav>
 
     <section class="chat-log" id="chatLog" aria-live="polite">
       <div class="chat-empty">Start the conversation with a question.</div>

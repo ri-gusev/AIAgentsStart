@@ -3,6 +3,7 @@
 #include "agent.h"
 
 #include <cctype>
+#include <atomic>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -19,6 +20,19 @@
 namespace {
 constexpr size_t kMaxHttpHeaderBytes = 64 * 1024;
 constexpr size_t kMaxHttpBodyBytes = 1024 * 1024;
+
+#ifdef _WIN32
+std::atomic<bool> gStopRequested{false};
+
+BOOL WINAPI handleConsoleSignal(DWORD signal) {
+    if (signal == CTRL_C_EVENT || signal == CTRL_BREAK_EVENT ||
+        signal == CTRL_CLOSE_EVENT || signal == CTRL_SHUTDOWN_EVENT) {
+        gStopRequested.store(true);
+        return TRUE;
+    }
+    return FALSE;
+}
+#endif
 
 std::string jsonEscape(const std::string& text) {
     std::string result;
@@ -54,16 +68,21 @@ std::string extractJsonStringField(const std::string& json, const std::string& f
     return {};
 }
 
-bool extractJsonBoolField(const std::string& json, const std::string& field, bool& value) {
+bool extractJsonUnsignedField(const std::string& json, const std::string& field,
+                              std::size_t& value) {
     const auto key = json.find("\"" + field + "\"");
     if (key == std::string::npos) return false;
     const auto colon = json.find(':', key + field.size() + 2);
     if (colon == std::string::npos) return false;
     const auto start = json.find_first_not_of(" \t\r\n", colon + 1);
-    if (start == std::string::npos) return false;
-    if (json.compare(start, 4, "true") == 0) { value = true; return true; }
-    if (json.compare(start, 5, "false") == 0) { value = false; return true; }
-    return false;
+    if (start == std::string::npos ||
+        !std::isdigit(static_cast<unsigned char>(json[start]))) return false;
+    try {
+        value = std::stoull(json.substr(start));
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 std::string buildAgentStateFields(const Agent& agent) {
@@ -74,26 +93,42 @@ std::string buildAgentStateFields(const Agent& agent) {
         stream << std::fixed << std::setprecision(8) << value;
         return stream.str();
     };
+    std::string branchesJson = "[";
+    bool first = true;
+    for (const auto& branch : agent.branches()) {
+        if (!first) branchesJson += ',';
+        first = false;
+        branchesJson += "{\"id\":" + std::to_string(branch.id) +
+                        ",\"label\":\"" + jsonEscape(branch.label) +
+                        "\",\"active\":" + (branch.active ? "true" : "false") + "}";
+    }
+    branchesJson += ']';
+
+    std::string conversationJson = "[";
+    first = true;
+    for (const auto& message : agent.visibleConversation()) {
+        if (!first) conversationJson += ',';
+        first = false;
+        conversationJson += "{\"role\":\"" + jsonEscape(message.role) +
+                            "\",\"content\":\"" + jsonEscape(message.content) + "\"}";
+    }
+    conversationJson += ']';
+
     return
-        "\"memory\":{\"compression_enabled\":" +
-        std::string(agent.compressionEnabled() ? "true" : "false") +
-        ",\"summary_present\":" +
-        std::string(agent.hasConversationSummary() ? "true" : "false") +
-        ",\"raw_turns\":" + std::to_string(agent.rawHistoryTurnCount()) +
-        "},\"usage\":{\"input_tokens\":" + std::to_string(usage.inputTokens) +
+        "\"strategy\":" + std::to_string(agent.strategy()) +
+        ",\"memory\":{\"raw_messages\":" +
+        std::to_string(agent.rawHistoryMessageCount()) +
+        ",\"long_term_facts\":" + std::to_string(agent.longTermFactCount()) +
+        ",\"active_branch_id\":" + std::to_string(agent.activeBranchId()) +
+        ",\"branches\":" + branchesJson + "}" +
+        ",\"conversation\":" + conversationJson +
+        ",\"usage\":{\"input_tokens\":" + std::to_string(usage.inputTokens) +
         ",\"cached_input_tokens\":" + std::to_string(usage.cachedInputTokens) +
         ",\"output_tokens\":" + std::to_string(usage.outputTokens) +
         ",\"total_tokens\":" + std::to_string(usage.totalTokens) +
         ",\"cost_usd\":{\"input\":" + usd(cost.inputUsd) +
         ",\"output\":" + usd(cost.outputUsd) +
-        ",\"total\":" + usd(cost.totalUsd) + "}" +
-        ",\"summary\":{\"input_tokens\":" +
-        std::to_string(usage.summaryInputTokens) +
-        ",\"cached_input_tokens\":" +
-        std::to_string(usage.summaryCachedInputTokens) +
-        ",\"output_tokens\":" + std::to_string(usage.summaryOutputTokens) +
-        ",\"total_tokens\":" + std::to_string(usage.summaryTotalTokens) +
-        ",\"cost_usd\":" + usd(cost.summaryUsd) + "}}";
+        ",\"total\":" + usd(cost.totalUsd) + "}}";
 }
 
 bool parseContentLength(const std::string& text, size_t& value) {
@@ -195,8 +230,28 @@ int runWebServer(Agent& agent) {
         std::cerr << "Could not start server on http://127.0.0.1:8080\n";
         closesocket(server); WSACleanup(); return 1;
     }
+    std::string resetError;
+    if (!agent.resetAllMemory(resetError)) {
+        std::cerr << "Could not reset agent memory: " << resetError << '\n';
+        closesocket(server);
+        WSACleanup();
+        return 1;
+    }
+    gStopRequested.store(false);
+    SetConsoleCtrlHandler(handleConsoleSignal, TRUE);
     std::cout << "Open http://127.0.0.1:8080 in your browser\nPress Ctrl+C to stop the server\n";
-    while (true) {
+    while (!gStopRequested.load()) {
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(server, &readSet);
+        timeval waitTime{};
+        waitTime.tv_usec = 250000;
+        const int ready = select(0, &readSet, nullptr, nullptr, &waitTime);
+        if (ready == 0) continue;
+        if (ready == SOCKET_ERROR) {
+            if (gStopRequested.load()) break;
+            continue;
+        }
         SOCKET client = accept(server, nullptr, nullptr);
         if (client == INVALID_SOCKET) continue;
         const DWORD timeoutMs = 10000;
@@ -220,20 +275,31 @@ int runWebServer(Agent& agent) {
                     "\"," + buildAgentStateFields(agent) + "}";
                 sendHttpResponse(client, 200, "application/json", response);
             }
-        } else if (request.method == "GET" && request.path == "/api/compression") {
+        } else if (request.method == "GET" && request.path == "/api/state") {
             sendHttpResponse(client, 200, "application/json",
                              "{" + buildAgentStateFields(agent) + "}");
-        } else if (request.method == "POST" && request.path == "/api/compression/toggle") {
-            agent.setCompressionEnabled(!agent.compressionEnabled());
-            sendHttpResponse(client, 200, "application/json",
-                             "{" + buildAgentStateFields(agent) + "}");
-        } else if (request.method == "POST" && request.path == "/api/compression") {
-            bool enabled = false;
-            if (!extractJsonBoolField(request.body, "enabled", enabled)) {
+        } else if (request.method == "POST" && request.path == "/api/strategy") {
+            std::size_t strategy = 0;
+            std::string error;
+            if (!extractJsonUnsignedField(request.body, "strategy", strategy) ||
+                !agent.setStrategy(static_cast<int>(strategy), error)) {
                 sendHttpResponse(client, 400, "application/json",
-                                 "{\"error\":\"enabled must be true or false\"}");
+                                 "{\"error\":\"" + jsonEscape(
+                                     error.empty() ? "strategy must be 1, 2, or 3" : error) +
+                                     "\"}");
             } else {
-                agent.setCompressionEnabled(enabled);
+                sendHttpResponse(client, 200, "application/json",
+                                 "{" + buildAgentStateFields(agent) + "}");
+            }
+        } else if (request.method == "POST" && request.path == "/api/branch") {
+            std::size_t branchId = 0;
+            std::string error;
+            if (!extractJsonUnsignedField(request.body, "branch_id", branchId) ||
+                !agent.selectBranch(branchId, error)) {
+                sendHttpResponse(client, 400, "application/json",
+                                 "{\"error\":\"" + jsonEscape(
+                                     error.empty() ? "branch_id is required" : error) + "\"}");
+            } else {
                 sendHttpResponse(client, 200, "application/json",
                                  "{" + buildAgentStateFields(agent) + "}");
             }
@@ -247,5 +313,9 @@ int runWebServer(Agent& agent) {
         }
         closesocket(client);
     }
+    SetConsoleCtrlHandler(handleConsoleSignal, FALSE);
+    closesocket(server);
+    WSACleanup();
+    return 0;
 #endif
 }

@@ -22,6 +22,7 @@ public:
     const std::string& initializationError() const;
     bool loadAll(std::vector<LongTermMemoryFact>& facts, std::string& error) const;
     bool upsert(const LongTermMemoryFact& fact, std::string& error);
+    bool clearAll(std::string& error);
 
 private:
     sqlite3* database_ = nullptr;
