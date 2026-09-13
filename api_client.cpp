@@ -3,6 +3,7 @@
 #include <curl/curl.h>
 
 #include <cctype>
+#include <limits>
 
 namespace {
 constexpr long kRequestTimeoutSeconds = 90L;
@@ -67,12 +68,119 @@ std::string extractContent(const std::string& json) {
     return extractJsonStringField(json, "content", message);
 }
 
+size_t findTopLevelFieldValue(const std::string& json, const std::string& field) {
+    int objectDepth = 0;
+    for (size_t position = 0; position < json.size(); ++position) {
+        if (json[position] == '{') {
+            ++objectDepth;
+            continue;
+        }
+        if (json[position] == '}') {
+            --objectDepth;
+            continue;
+        }
+        if (json[position] != '"') continue;
+
+        const size_t stringStart = position + 1;
+        bool escaped = false;
+        bool containsEscape = false;
+        size_t stringEnd = stringStart;
+        for (; stringEnd < json.size(); ++stringEnd) {
+            const char c = json[stringEnd];
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                containsEscape = true;
+                continue;
+            }
+            if (c == '"') break;
+        }
+        if (stringEnd >= json.size()) return std::string::npos;
+
+        if (objectDepth == 1 && !containsEscape &&
+            stringEnd - stringStart == field.size() &&
+            json.compare(stringStart, field.size(), field) == 0) {
+            size_t colon = stringEnd + 1;
+            while (colon < json.size() &&
+                   std::isspace(static_cast<unsigned char>(json[colon]))) ++colon;
+            if (colon < json.size() && json[colon] == ':') return colon + 1;
+        }
+        position = stringEnd;
+    }
+    return std::string::npos;
+}
+
+size_t findJsonObjectEnd(const std::string& json, size_t objectStart) {
+    int depth = 0;
+    bool inString = false;
+    bool escaped = false;
+    for (size_t position = objectStart; position < json.size(); ++position) {
+        const char c = json[position];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (c == '\\') escaped = true;
+            else if (c == '"') inString = false;
+            continue;
+        }
+        if (c == '"') inString = true;
+        else if (c == '{') ++depth;
+        else if (c == '}' && --depth == 0) return position;
+    }
+    return std::string::npos;
+}
+
+bool extractJsonUnsignedField(const std::string& json, const std::string& field,
+                              size_t from, size_t to, std::uint64_t& value) {
+    const auto key = json.find("\"" + field + "\"", from);
+    if (key == std::string::npos || key >= to) return false;
+    const auto colon = json.find(':', key + field.size() + 2);
+    if (colon == std::string::npos || colon >= to) return false;
+    size_t position = json.find_first_not_of(" \t\r\n", colon + 1);
+    if (position == std::string::npos || position >= to ||
+        !std::isdigit(static_cast<unsigned char>(json[position]))) {
+        return false;
+    }
+
+    std::uint64_t parsed = 0;
+    while (position < to && std::isdigit(static_cast<unsigned char>(json[position]))) {
+        const unsigned digit = static_cast<unsigned>(json[position] - '0');
+        if (parsed > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) return false;
+        parsed = parsed * 10 + digit;
+        ++position;
+    }
+    value = parsed;
+    return true;
+}
+
+void extractTokenUsage(const std::string& json, ApiTokenUsage& usage) {
+    usage = {};
+    const auto usageValue = findTopLevelFieldValue(json, "usage");
+    if (usageValue == std::string::npos) return;
+    const auto usageStart = json.find_first_not_of(" \t\r\n", usageValue);
+    if (usageStart == std::string::npos || json[usageStart] != '{') return;
+    const auto usageEnd = findJsonObjectEnd(json, usageStart);
+    if (usageEnd == std::string::npos) return;
+    extractJsonUnsignedField(json, "prompt_tokens", usageStart, usageEnd, usage.inputTokens);
+    extractJsonUnsignedField(json, "completion_tokens", usageStart, usageEnd, usage.outputTokens);
+    extractJsonUnsignedField(json, "total_tokens", usageStart, usageEnd, usage.totalTokens);
+}
+
+std::string extractFinishReason(const std::string& json) {
+    const auto position = json.rfind("\"finish_reason\"");
+    return position == std::string::npos
+               ? std::string{}
+               : extractJsonStringField(json, "finish_reason", position);
+}
+
 std::string explainMissingContent(const std::string& json) {
     const auto choices = json.find("\"choices\"");
     const std::string refusal = extractJsonStringField(json, "refusal", choices);
     if (!refusal.empty()) return "Model refusal: " + refusal;
 
-    const std::string finishReason = extractJsonStringField(json, "finish_reason", choices);
+    const std::string finishReason = extractFinishReason(json);
     std::string error = "OpenAI returned HTTP 200 but choices[0].message.content was empty or null";
     if (!finishReason.empty()) error += " (finish_reason=" + finishReason + ")";
     if (finishReason == "length") error += ". The completion token limit was reached.";
@@ -86,7 +194,11 @@ bool ApiClient::isReady() const { return initialized_; }
 
 bool ApiClient::sendChatCompletion(const std::string& apiKey, const std::string& model,
                                    const std::string& messagesJson, std::string& answer,
-                                   std::string& error, bool jsonResponse) const {
+                                   std::string& error, bool jsonResponse,
+                                   ApiTokenUsage* usage,
+                                   std::string* finishReason) const {
+    if (usage) *usage = {};
+    if (finishReason) finishReason->clear();
     if (!initialized_) { error = "Could not initialize libcurl"; return false; }
     std::string body = "{\"model\":\"" + jsonEscape(model) + "\",\"messages\":" + messagesJson +
                        ",\"max_completion_tokens\":" + std::to_string(kMaxCompletionTokens);
@@ -122,6 +234,8 @@ bool ApiClient::sendChatCompletion(const std::string& apiKey, const std::string&
         error = "OpenAI API returned HTTP " + std::to_string(status) + ": " + response;
         return false;
     }
+    if (usage) extractTokenUsage(response, *usage);
+    if (finishReason) *finishReason = extractFinishReason(response);
     answer = extractContent(response);
     if (answer.empty()) { error = explainMissingContent(response); return false; }
     return true;

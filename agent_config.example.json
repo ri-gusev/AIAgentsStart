@@ -1,0 +1,9 @@
+{
+  "model": "gpt-5.6-luna",
+  "input_policy": "",
+  "output_policy": "Check the initial answer for quality, clear structure, and appropriate length for the user's request. If it does not meet these requirements, correct it before returning it.",
+  "short_term_memory_turns": 15,
+  "compression_enabled": true,
+  "compression_keep_turns": 10,
+  "long_term_memory_db": "agent_memory.db"
+}

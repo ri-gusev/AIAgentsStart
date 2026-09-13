@@ -23,8 +23,23 @@
       <div class="question-copy">
         <span>ONE AGENT</span>
         <h2>Ask a question</h2>
-        <p>The agent keeps the last 15 dialog turns in the current session and checks each answer before returning it.</p>
+        <p>The agent combines SQLite facts, a conversation summary, and the latest raw dialog turns.</p>
       </div>
+      <aside class="memory-control" aria-label="Agent memory controls">
+        <button class="compression-toggle" id="compressionToggle" type="button" aria-pressed="false" disabled>
+          <span class="toggle-track" aria-hidden="true"><i></i></span>
+          <span class="toggle-copy">
+            <span>History compression</span>
+            <strong id="compressionMode" aria-live="polite">Loading...</strong>
+          </span>
+        </button>
+        <dl class="memory-stats" aria-live="polite">
+          <div><dt>Raw history</dt><dd><span id="rawTurns">0</span> turns</dd></div>
+          <div><dt>Summary</dt><dd id="summaryState">Empty</dd></div>
+          <div><dt>All tokens</dt><dd id="totalTokens">0</dd></div>
+          <div><dt>Summary tokens</dt><dd id="summaryTokens">0</dd></div>
+        </dl>
+      </aside>
     </section>
 
     <section class="chat-log" id="chatLog" aria-live="polite">

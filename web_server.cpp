@@ -5,6 +5,7 @@
 #include <cctype>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -15,6 +16,9 @@
 #endif
 
 namespace {
+constexpr size_t kMaxHttpHeaderBytes = 64 * 1024;
+constexpr size_t kMaxHttpBodyBytes = 1024 * 1024;
+
 std::string jsonEscape(const std::string& text) {
     std::string result;
     for (unsigned char c : text) {
@@ -49,6 +53,57 @@ std::string extractJsonStringField(const std::string& json, const std::string& f
     return {};
 }
 
+bool extractJsonBoolField(const std::string& json, const std::string& field, bool& value) {
+    const auto key = json.find("\"" + field + "\"");
+    if (key == std::string::npos) return false;
+    const auto colon = json.find(':', key + field.size() + 2);
+    if (colon == std::string::npos) return false;
+    const auto start = json.find_first_not_of(" \t\r\n", colon + 1);
+    if (start == std::string::npos) return false;
+    if (json.compare(start, 4, "true") == 0) { value = true; return true; }
+    if (json.compare(start, 5, "false") == 0) { value = false; return true; }
+    return false;
+}
+
+std::string buildAgentStateFields(const Agent& agent) {
+    const Agent::TokenStatistics& usage = agent.tokenStatistics();
+    return
+        "\"memory\":{\"compression_enabled\":" +
+        std::string(agent.compressionEnabled() ? "true" : "false") +
+        ",\"summary_present\":" +
+        std::string(agent.hasConversationSummary() ? "true" : "false") +
+        ",\"raw_turns\":" + std::to_string(agent.rawHistoryTurnCount()) +
+        "},\"usage\":{\"input_tokens\":" + std::to_string(usage.inputTokens) +
+        ",\"output_tokens\":" + std::to_string(usage.outputTokens) +
+        ",\"total_tokens\":" + std::to_string(usage.totalTokens) +
+        ",\"summary\":{\"input_tokens\":" +
+        std::to_string(usage.summaryInputTokens) +
+        ",\"output_tokens\":" + std::to_string(usage.summaryOutputTokens) +
+        ",\"total_tokens\":" + std::to_string(usage.summaryTotalTokens) + "}}";
+}
+
+bool parseContentLength(const std::string& text, size_t& value) {
+    size_t position = 0;
+    while (position < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[position]))) ++position;
+    if (position == text.size() ||
+        !std::isdigit(static_cast<unsigned char>(text[position]))) return false;
+
+    size_t parsed = 0;
+    while (position < text.size() &&
+           std::isdigit(static_cast<unsigned char>(text[position]))) {
+        const unsigned digit = static_cast<unsigned>(text[position] - '0');
+        if (parsed > (std::numeric_limits<size_t>::max() - digit) / 10) return false;
+        parsed = parsed * 10 + digit;
+        ++position;
+    }
+    while (position < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[position]))) ++position;
+    if (position != text.size() || parsed > kMaxHttpBodyBytes) return false;
+    value = parsed;
+    return true;
+}
+
 #ifdef _WIN32
 struct HttpRequest { std::string method; std::string path; std::string body; };
 
@@ -68,9 +123,10 @@ bool readHttpRequest(SOCKET client, HttpRequest& request) {
     size_t headerEnd = std::string::npos;
     while ((headerEnd = raw.find("\r\n\r\n")) == std::string::npos) {
         const int count = recv(client, buffer, sizeof(buffer), 0);
-        if (count <= 0 || raw.size() > 1024 * 1024) return false;
+        if (count <= 0 || raw.size() > kMaxHttpHeaderBytes) return false;
         raw.append(buffer, static_cast<size_t>(count));
     }
+    if (headerEnd > kMaxHttpHeaderBytes) return false;
     std::istringstream headers(raw.substr(0, headerEnd));
     headers >> request.method >> request.path;
     size_t contentLength = 0;
@@ -82,7 +138,8 @@ bool readHttpRequest(SOCKET client, HttpRequest& request) {
         if (colon == std::string::npos) continue;
         std::string name = line.substr(0, colon);
         for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (name == "content-length") contentLength = std::stoul(line.substr(colon + 1));
+        if (name == "content-length" &&
+            !parseContentLength(line.substr(colon + 1), contentLength)) return false;
     }
     request.body = raw.substr(headerEnd + 4);
     while (request.body.size() < contentLength) {
@@ -137,8 +194,35 @@ int runWebServer(Agent& agent) {
             const std::string prompt = extractJsonStringField(request.body, "message");
             std::string answer, error;
             if (prompt.empty()) sendHttpResponse(client, 400, "application/json", "{\"error\":\"Message is required\"}");
-            else if (!agent.respond(prompt, answer, error)) sendHttpResponse(client, 500, "application/json", "{\"error\":\"" + jsonEscape(error) + "\"}");
-            else sendHttpResponse(client, 200, "application/json", "{\"model\":\"" + jsonEscape(agent.modelName()) + "\",\"answer\":\"" + jsonEscape(answer) + "\"}");
+            else if (!agent.respond(prompt, answer, error)) {
+                sendHttpResponse(client, 500, "application/json",
+                                 "{\"error\":\"" + jsonEscape(error) + "\"," +
+                                     buildAgentStateFields(agent) + "}");
+            }
+            else {
+                const std::string response =
+                    "{\"model\":\"" + jsonEscape(agent.modelName()) +
+                    "\",\"answer\":\"" + jsonEscape(answer) +
+                    "\"," + buildAgentStateFields(agent) + "}";
+                sendHttpResponse(client, 200, "application/json", response);
+            }
+        } else if (request.method == "GET" && request.path == "/api/compression") {
+            sendHttpResponse(client, 200, "application/json",
+                             "{" + buildAgentStateFields(agent) + "}");
+        } else if (request.method == "POST" && request.path == "/api/compression/toggle") {
+            agent.setCompressionEnabled(!agent.compressionEnabled());
+            sendHttpResponse(client, 200, "application/json",
+                             "{" + buildAgentStateFields(agent) + "}");
+        } else if (request.method == "POST" && request.path == "/api/compression") {
+            bool enabled = false;
+            if (!extractJsonBoolField(request.body, "enabled", enabled)) {
+                sendHttpResponse(client, 400, "application/json",
+                                 "{\"error\":\"enabled must be true or false\"}");
+            } else {
+                agent.setCompressionEnabled(enabled);
+                sendHttpResponse(client, 200, "application/json",
+                                 "{" + buildAgentStateFields(agent) + "}");
+            }
         } else {
             std::string fileName, contentType;
             if (request.method == "GET" && request.path == "/") { fileName = "index.html"; contentType = "text/html"; }
