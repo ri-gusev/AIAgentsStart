@@ -13,11 +13,20 @@ class Agent {
 public:
     struct TokenStatistics {
         std::uint64_t inputTokens = 0;
+        std::uint64_t cachedInputTokens = 0;
         std::uint64_t outputTokens = 0;
         std::uint64_t totalTokens = 0;
         std::uint64_t summaryInputTokens = 0;
+        std::uint64_t summaryCachedInputTokens = 0;
         std::uint64_t summaryOutputTokens = 0;
         std::uint64_t summaryTotalTokens = 0;
+    };
+
+    struct CostStatistics {
+        double inputUsd = 0.0;
+        double outputUsd = 0.0;
+        double totalUsd = 0.0;
+        double summaryUsd = 0.0;
     };
 
     explicit Agent(const std::string& configPath = "agent_config.local.json");
@@ -31,6 +40,7 @@ public:
     std::size_t rawHistoryTurnCount() const;
     bool hasConversationSummary() const;
     const TokenStatistics& tokenStatistics() const;
+    CostStatistics costStatistics() const;
 
     // Sends one user turn to the model and maintains raw history plus an optional summary.
     bool respond(const std::string& userMessage, std::string& answer, std::string& error);
@@ -49,6 +59,9 @@ private:
         bool compressionEnabled = true;
         std::size_t compressionKeepTurns = 10;
         std::string longTermMemoryDatabase = "agent_memory.db";
+        double inputPricePerMillion = 0.0;
+        double cachedInputPricePerMillion = 0.0;
+        double outputPricePerMillion = 0.0;
     };
 
     bool loadConfig(const std::string& configPath, std::string& error);

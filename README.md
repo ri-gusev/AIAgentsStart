@@ -117,10 +117,27 @@ CREATE TABLE long_term_memory (
 `ApiClient` читает из Chat Completions response:
 
 - `prompt_tokens` как `input_tokens`;
+- `cached_tokens` как `cached_input_tokens`, если API вернул детализацию prompt;
 - `completion_tokens` как `output_tokens`;
 - `total_tokens` как `total_tokens`.
 
-Общая статистика суммирует поля `usage` из полученных успешных ответов LLM API. Поле `usage.summary` является отдельным подмножеством и учитывает только создание summary. Это диагностический счётчик, а не точный биллинг: для запроса, завершившегося сетевым таймаутом, приложение может не получить данные о фактически потраченных токенах.
+На сайте отображаются три накопительных показателя:
+
+- `Input context` — все входные токены всех LLM-вызовов и их стоимость;
+- `Summary usage` — входные и выходные токены только запросов сжатия и их стоимость;
+- `All usage` — все входные и выходные токены Agent и полная стоимость.
+
+Стоимость рассчитывается Agent по ставкам из локального конфига:
+
+```text
+input USD = (uncached_input × input_rate + cached_input × cached_rate) / 1 000 000
+output USD = output_tokens × output_rate / 1 000 000
+total USD = input USD + output USD
+```
+
+Поле `usage.summary` является отдельным подмножеством общей статистики, а не дополнительными токенами поверх `usage.total_tokens`. Для `gpt-5.6-luna` в примере конфига указаны актуальные на момент написания ставки: `$0.20` за 1 млн input, `$0.02` за 1 млн cached input и `$1.20` за 1 млн output tokens.
+
+Это локальная оценка, а не точный счёт: при изменении цены нужно обновить конфиг, а для запроса, завершившегося сетевым таймаутом, приложение может не получить данные о фактически потраченных токенах.
 
 Пример части ответа `/api/chat`:
 
@@ -133,12 +150,20 @@ CREATE TABLE long_term_memory (
   },
   "usage": {
     "input_tokens": 1200,
+    "cached_input_tokens": 200,
     "output_tokens": 350,
     "total_tokens": 1550,
+    "cost_usd": {
+      "input": 0.000204,
+      "output": 0.000420,
+      "total": 0.000624
+    },
     "summary": {
       "input_tokens": 240,
+      "cached_input_tokens": 0,
       "output_tokens": 60,
-      "total_tokens": 300
+      "total_tokens": 300,
+      "cost_usd": 0.000120
     }
   }
 }
@@ -173,6 +198,9 @@ Copy-Item agent_config.example.json agent_config.local.json
 | Поле | Описание |
 | --- | --- |
 | `model` | Модель для всех LLM-вызовов |
+| `input_price_per_million` | Цена 1 млн обычных входных токенов в USD |
+| `cached_input_price_per_million` | Цена 1 млн кэшированных входных токенов в USD |
+| `output_price_per_million` | Цена 1 млн выходных токенов в USD |
 | `input_policy` | Инструкция, добавляемая в начало контекста |
 | `output_policy` | Проверка и при необходимости исправление первоначального ответа |
 | `short_term_memory_turns` | Максимум raw-ходов перед сжатием или удалением |

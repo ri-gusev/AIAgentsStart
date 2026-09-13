@@ -4,6 +4,7 @@
 
 #include <cctype>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -67,6 +68,12 @@ bool extractJsonBoolField(const std::string& json, const std::string& field, boo
 
 std::string buildAgentStateFields(const Agent& agent) {
     const Agent::TokenStatistics& usage = agent.tokenStatistics();
+    const Agent::CostStatistics cost = agent.costStatistics();
+    const auto usd = [](double value) {
+        std::ostringstream stream;
+        stream << std::fixed << std::setprecision(8) << value;
+        return stream.str();
+    };
     return
         "\"memory\":{\"compression_enabled\":" +
         std::string(agent.compressionEnabled() ? "true" : "false") +
@@ -74,12 +81,19 @@ std::string buildAgentStateFields(const Agent& agent) {
         std::string(agent.hasConversationSummary() ? "true" : "false") +
         ",\"raw_turns\":" + std::to_string(agent.rawHistoryTurnCount()) +
         "},\"usage\":{\"input_tokens\":" + std::to_string(usage.inputTokens) +
+        ",\"cached_input_tokens\":" + std::to_string(usage.cachedInputTokens) +
         ",\"output_tokens\":" + std::to_string(usage.outputTokens) +
         ",\"total_tokens\":" + std::to_string(usage.totalTokens) +
+        ",\"cost_usd\":{\"input\":" + usd(cost.inputUsd) +
+        ",\"output\":" + usd(cost.outputUsd) +
+        ",\"total\":" + usd(cost.totalUsd) + "}" +
         ",\"summary\":{\"input_tokens\":" +
         std::to_string(usage.summaryInputTokens) +
+        ",\"cached_input_tokens\":" +
+        std::to_string(usage.summaryCachedInputTokens) +
         ",\"output_tokens\":" + std::to_string(usage.summaryOutputTokens) +
-        ",\"total_tokens\":" + std::to_string(usage.summaryTotalTokens) + "}}";
+        ",\"total_tokens\":" + std::to_string(usage.summaryTotalTokens) +
+        ",\"cost_usd\":" + usd(cost.summaryUsd) + "}}";
 }
 
 bool parseContentLength(const std::string& text, size_t& value) {

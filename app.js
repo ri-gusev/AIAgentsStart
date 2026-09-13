@@ -6,8 +6,12 @@ const compressionToggle = document.querySelector('#compressionToggle');
 const compressionMode = document.querySelector('#compressionMode');
 const rawTurns = document.querySelector('#rawTurns');
 const summaryState = document.querySelector('#summaryState');
+const contextTokens = document.querySelector('#contextTokens');
+const contextCost = document.querySelector('#contextCost');
 const totalTokens = document.querySelector('#totalTokens');
+const totalCost = document.querySelector('#totalCost');
 const summaryTokens = document.querySelector('#summaryTokens');
+const summaryCost = document.querySelector('#summaryCost');
 
 let compressionEnabled = false;
 let chatPending = false;
@@ -24,6 +28,10 @@ function formatTokenCount(value) {
   return Number(value || 0).toLocaleString();
 }
 
+function formatUsd(value) {
+  return `$${Number(value || 0).toFixed(6)}`;
+}
+
 function renderAgentState(data) {
   if (!data?.memory) return;
   compressionEnabled = Boolean(data.memory.compression_enabled);
@@ -33,8 +41,12 @@ function renderAgentState(data) {
   summaryState.textContent = data.memory.summary_present
     ? (compressionEnabled ? 'Active' : 'Stored')
     : 'Empty';
-  totalTokens.textContent = formatTokenCount(data.usage?.total_tokens);
-  summaryTokens.textContent = formatTokenCount(data.usage?.summary?.total_tokens);
+  contextTokens.textContent = `${formatTokenCount(data.usage?.input_tokens)} tokens`;
+  contextCost.textContent = formatUsd(data.usage?.cost_usd?.input);
+  summaryTokens.textContent = `${formatTokenCount(data.usage?.summary?.total_tokens)} tokens`;
+  summaryCost.textContent = formatUsd(data.usage?.summary?.cost_usd);
+  totalTokens.textContent = `${formatTokenCount(data.usage?.total_tokens)} tokens`;
+  totalCost.textContent = formatUsd(data.usage?.cost_usd?.total);
 }
 
 async function loadAgentState() {

@@ -164,6 +164,8 @@ void extractTokenUsage(const std::string& json, ApiTokenUsage& usage) {
     const auto usageEnd = findJsonObjectEnd(json, usageStart);
     if (usageEnd == std::string::npos) return;
     extractJsonUnsignedField(json, "prompt_tokens", usageStart, usageEnd, usage.inputTokens);
+    extractJsonUnsignedField(json, "cached_tokens", usageStart, usageEnd,
+                             usage.cachedInputTokens);
     extractJsonUnsignedField(json, "completion_tokens", usageStart, usageEnd, usage.outputTokens);
     extractJsonUnsignedField(json, "total_tokens", usageStart, usageEnd, usage.totalTokens);
 }

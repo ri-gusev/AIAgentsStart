@@ -5,6 +5,7 @@
 
 struct ApiTokenUsage {
     std::uint64_t inputTokens = 0;
+    std::uint64_t cachedInputTokens = 0;
     std::uint64_t outputTokens = 0;
     std::uint64_t totalTokens = 0;
 };

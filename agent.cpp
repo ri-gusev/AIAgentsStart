@@ -1,6 +1,7 @@
 #include "agent.h"
 
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -69,6 +70,22 @@ bool extractJsonBoolField(const std::string& json, const std::string& field, boo
     if (json.compare(start, 4, "true") == 0) { value = true; return true; }
     if (json.compare(start, 5, "false") == 0) { value = false; return true; }
     return false;
+}
+
+bool extractJsonNumberField(const std::string& json, const std::string& field, double& value) {
+    const auto key = json.find("\"" + field + "\"");
+    if (key == std::string::npos) return false;
+    const auto colon = json.find(':', key + field.size() + 2);
+    if (colon == std::string::npos) return false;
+    const auto start = json.find_first_not_of(" \t\r\n", colon + 1);
+    if (start == std::string::npos) return false;
+    try {
+        std::size_t consumed = 0;
+        value = std::stod(json.substr(start), &consumed);
+        return consumed > 0 && std::isfinite(value) && value >= 0.0;
+    } catch (...) {
+        return false;
+    }
 }
 
 bool parseBooleanOption(std::string text, bool& value) {
@@ -169,6 +186,29 @@ void Agent::setCompressionEnabled(bool enabled) {
 std::size_t Agent::rawHistoryTurnCount() const { return shortTermMemory_.size(); }
 bool Agent::hasConversationSummary() const { return !conversationSummary_.empty(); }
 const Agent::TokenStatistics& Agent::tokenStatistics() const { return tokenStatistics_; }
+Agent::CostStatistics Agent::costStatistics() const {
+    const auto inputCost = [this](std::uint64_t input, std::uint64_t cached) {
+        const std::uint64_t safeCached = cached > input ? input : cached;
+        const std::uint64_t uncached = input - safeCached;
+        return (static_cast<double>(uncached) * config_.inputPricePerMillion +
+                static_cast<double>(safeCached) * config_.cachedInputPricePerMillion) /
+               1000000.0;
+    };
+    const auto outputCost = [this](std::uint64_t output) {
+        return static_cast<double>(output) * config_.outputPricePerMillion / 1000000.0;
+    };
+
+    CostStatistics cost;
+    cost.inputUsd = inputCost(tokenStatistics_.inputTokens,
+                              tokenStatistics_.cachedInputTokens);
+    cost.outputUsd = outputCost(tokenStatistics_.outputTokens);
+    cost.totalUsd = cost.inputUsd + cost.outputUsd;
+    cost.summaryUsd =
+        inputCost(tokenStatistics_.summaryInputTokens,
+                  tokenStatistics_.summaryCachedInputTokens) +
+        outputCost(tokenStatistics_.summaryOutputTokens);
+    return cost;
+}
 
 bool Agent::loadConfig(const std::string& configPath, std::string& error) {
     std::ifstream file(configPath, std::ios::binary);
@@ -179,6 +219,15 @@ bool Agent::loadConfig(const std::string& configPath, std::string& error) {
     config_.outputPolicy = extractJsonStringField(json, "output_policy");
     const std::string databasePath = extractJsonStringField(json, "long_term_memory_db");
     if (!databasePath.empty()) config_.longTermMemoryDatabase = databasePath;
+    if (!extractJsonNumberField(json, "input_price_per_million",
+                                config_.inputPricePerMillion) ||
+        !extractJsonNumberField(json, "cached_input_price_per_million",
+                                config_.cachedInputPricePerMillion) ||
+        !extractJsonNumberField(json, "output_price_per_million",
+                                config_.outputPricePerMillion)) {
+        error = "Agent configuration requires non-negative token prices";
+        return false;
+    }
     const auto memoryKey = json.find("\"short_term_memory_turns\"");
     if (memoryKey != std::string::npos) {
         const auto colon = json.find(':', memoryKey);
@@ -355,10 +404,12 @@ bool Agent::sendTrackedChatCompletion(const std::string& messagesJson, std::stri
                                                        answer, error, jsonResponse, &usage,
                                                        finishReason);
     tokenStatistics_.inputTokens += usage.inputTokens;
+    tokenStatistics_.cachedInputTokens += usage.cachedInputTokens;
     tokenStatistics_.outputTokens += usage.outputTokens;
     tokenStatistics_.totalTokens += usage.totalTokens;
     if (summaryRequest) {
         tokenStatistics_.summaryInputTokens += usage.inputTokens;
+        tokenStatistics_.summaryCachedInputTokens += usage.cachedInputTokens;
         tokenStatistics_.summaryOutputTokens += usage.outputTokens;
         tokenStatistics_.summaryTotalTokens += usage.totalTokens;
     }
