@@ -84,49 +84,15 @@ button, textarea { font: inherit; }
 .question-copy h2 { margin: 8px 0 8px; font: 400 clamp(29px, 3vw, 44px)/1 Georgia, serif; letter-spacing: -.035em; }
 .question-copy p { max-width: 480px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 
-.strategy-control {
+.memory-panel {
   width: min(440px, 100%);
   padding: 13px;
   border: 1px solid var(--line);
   border-radius: 18px;
   background: rgba(238, 242, 255, .72);
 }
-.strategy-tabs {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 7px;
-}
-.strategy-tabs button {
-  min-width: 0;
-  padding: 10px 7px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  color: var(--ink);
-  background: white;
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 700;
-  white-space: nowrap;
-  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
-}
-.strategy-tabs button span {
-  width: 20px;
-  height: 20px;
-  margin-right: 3px;
-  display: inline-grid;
-  place-items: center;
-  border-radius: 50%;
-  color: white;
-  background: #a9aec2;
-  font-size: 10px;
-}
-.strategy-tabs button:hover:not(:disabled) { border-color: #a8b3e5; }
-.strategy-tabs button[aria-selected="true"] { border-color: var(--green); color: white; background: var(--green); }
-.strategy-tabs button[aria-selected="true"] span { color: var(--green); background: white; }
-.strategy-tabs button:focus-visible { outline: 3px solid rgba(68, 87, 196, .2); outline-offset: 2px; }
-.strategy-tabs button:disabled { opacity: .62; cursor: wait; }
 .memory-stats {
-  margin: 11px 3px 1px;
+  margin: 1px 3px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px 15px;
@@ -135,34 +101,19 @@ button, textarea { font: inherit; }
 .memory-stats dt { color: var(--muted); font-size: 9px; letter-spacing: .07em; text-transform: uppercase; }
 .memory-stats dd { margin: 2px 0 0; overflow: hidden; color: var(--ink); font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 
-.branch-bar {
-  margin-bottom: 14px;
-  padding: 11px 13px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  border: 1px solid #d9c8f5;
-  border-radius: 15px;
-  background: #f8f3ff;
+.chat-notice {
+  margin: 0 0 12px;
+  padding: 10px 13px;
+  border: 1px solid #e2c689;
+  border-radius: 12px;
+  color: #705515;
+  background: #fff9e9;
+  font-size: 12px;
+  line-height: 1.45;
+  max-height: 90px;
+  overflow-y: auto;
 }
-.branch-bar[hidden] { display: none; }
-.branch-bar > div:first-child { min-width: 170px; display: grid; gap: 2px; }
-.branch-bar strong { font-size: 11px; }
-.branch-bar span { color: var(--muted); font-size: 9px; }
-.branch-list { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.branch-list button {
-  padding: 7px 10px;
-  border: 1px solid #cdb8ee;
-  border-radius: 999px;
-  color: #5b2ca0;
-  background: white;
-  cursor: pointer;
-  font-size: 10px;
-  font-weight: 700;
-}
-.branch-list button[aria-current="true"] { border-color: var(--orange); color: white; background: var(--orange); }
-.branch-list button:disabled { opacity: .6; cursor: wait; }
+.chat-notice[hidden] { display: none; }
 
 .composer-panel { padding-top: 18px; }
 .composer {
@@ -228,6 +179,7 @@ textarea::placeholder { color: #979f99; }
 }
 
 .chat-message {
+  flex-shrink: 0;
   width: min(84%, 720px);
   padding: 15px 18px;
   border: 1px solid var(--line);
@@ -266,15 +218,16 @@ textarea::placeholder { color: #979f99; }
 @media (max-width: 900px) {
   .workspace { width: min(100% - 24px, 720px); margin: 12px auto; padding: 20px; }
   .question-panel { align-items: stretch; flex-direction: column; }
-  .strategy-control { width: 100%; }
-  .branch-bar { align-items: stretch; flex-direction: column; }
-  .branch-list { justify-content: flex-start; }
+  .memory-panel { width: 100%; }
 }
 
 @media (max-width: 520px) {
   .workspace { width: 100%; height: 100vh; height: 100dvh; margin: 0; border: 0; border-radius: 0; }
   .status { display: none; }
-  .question-panel { padding: 28px 0 24px; }
+  .masthead { padding-bottom: 14px; }
+  .question-panel { padding: 16px 0; gap: 14px; }
+  .question-copy h2 { font-size: 28px; }
+  .question-copy p { font-size: 11px; }
   .composer button span { display: none; }
   .composer button { padding: 0 13px; }
   .chat-message { width: 92%; }

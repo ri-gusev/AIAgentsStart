@@ -85,15 +85,3 @@ bool MemoryStore::upsert(const LongTermMemoryFact& fact, std::string& error) {
     }
     return true;
 }
-
-bool MemoryStore::clearAll(std::string& error) {
-    if (!isReady()) { error = initializationError_; return false; }
-    char* sqliteError = nullptr;
-    if (sqlite3_exec(database_, "DELETE FROM long_term_memory;", nullptr, nullptr,
-                     &sqliteError) != SQLITE_OK) {
-        error = sqliteError ? sqliteError : sqlite3_errmsg(database_);
-        sqlite3_free(sqliteError);
-        return false;
-    }
-    return true;
-}

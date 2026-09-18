@@ -23,31 +23,21 @@
       <div class="question-copy">
         <span>ONE AGENT</span>
         <h2>Ask a question</h2>
-        <p id="strategyDescription">Only the latest 10 messages are used. SQLite and summaries are disabled.</p>
+        <p id="memoryDescription">Recent messages, a rolling conversation summary, and important facts from SQLite form one shared context.</p>
       </div>
-      <aside class="strategy-control" aria-label="Memory strategy controls">
-        <div class="strategy-tabs" role="tablist" aria-label="Memory strategy">
-          <button type="button" role="tab" data-strategy="1" aria-selected="false" disabled><span>1</span> Short</button>
-          <button type="button" role="tab" data-strategy="2" aria-selected="false" disabled><span>2</span> SQLite</button>
-          <button type="button" role="tab" data-strategy="3" aria-selected="false" disabled><span>3</span> Branch</button>
-        </div>
+      <aside class="memory-panel" aria-label="Memory and token usage">
         <dl class="memory-stats" aria-live="polite">
-          <div><dt>Active context</dt><dd><span id="rawMessages">0</span> messages</dd></div>
-          <div><dt>SQLite facts</dt><dd id="longTermFacts">Disabled</dd></div>
-          <div><dt>Branches</dt><dd id="branchCount">Disabled</dd></div>
+          <div><dt>Recent context</dt><dd><span id="rawMessages">0</span> / <span id="rawMessageLimit">5</span> messages</dd></div>
+          <div><dt>SQLite facts</dt><dd id="longTermFacts">0</dd></div>
+          <div><dt>Conversation summary</dt><dd><span id="summaryStatus">Empty</span> · <span id="pendingSummaryMessages">0</span> pending</dd></div>
           <div><dt>Input context</dt><dd><span id="contextTokens">0</span> · <span id="contextCost">$0.000000</span></dd></div>
+          <div><dt>Summary usage</dt><dd><span id="summaryTokens">0</span> · <span id="summaryCost">$0.000000</span></dd></div>
           <div><dt>All usage</dt><dd><span id="totalTokens">0</span> · <span id="totalCost">$0.000000</span></dd></div>
         </dl>
       </aside>
     </section>
 
-    <nav class="branch-bar" id="branchBar" aria-label="Conversation branches" hidden>
-      <div>
-        <strong>Checkpoint branches</strong>
-        <span id="branchHint">A choice will appear when the agent detects a real dichotomy.</span>
-      </div>
-      <div class="branch-list" id="branchList"></div>
-    </nav>
+    <p class="chat-notice" id="chatNotice" role="status" hidden></p>
 
     <section class="chat-log" id="chatLog" aria-live="polite">
       <div class="chat-empty">Start the conversation with a question.</div>

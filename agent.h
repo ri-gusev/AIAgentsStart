@@ -16,23 +16,22 @@ public:
         std::uint64_t cachedInputTokens = 0;
         std::uint64_t outputTokens = 0;
         std::uint64_t totalTokens = 0;
+        std::uint64_t summaryInputTokens = 0;
+        std::uint64_t summaryCachedInputTokens = 0;
+        std::uint64_t summaryOutputTokens = 0;
+        std::uint64_t summaryTotalTokens = 0;
     };
 
     struct CostStatistics {
         double inputUsd = 0.0;
         double outputUsd = 0.0;
         double totalUsd = 0.0;
+        double summaryUsd = 0.0;
     };
 
     struct ChatMessage {
         std::string role;
         std::string content;
-    };
-
-    struct BranchInfo {
-        std::size_t id = 0;
-        std::string label;
-        bool active = false;
     };
 
     explicit Agent(const std::string& configPath = "agent_config.local.json");
@@ -41,41 +40,30 @@ public:
     bool isReady() const;
     const std::string& initializationError() const;
     const std::string& modelName() const;
-    int strategy() const;
-    bool setStrategy(int strategy, std::string& error);
-    bool selectBranch(std::size_t branchId, std::string& error);
-    bool resetAllMemory(std::string& error);
     std::size_t rawHistoryMessageCount() const;
+    std::size_t rawMessageLimit() const;
+    std::size_t pendingSummaryMessageCount() const;
     std::size_t longTermFactCount() const;
-    std::size_t activeBranchId() const;
-    std::vector<BranchInfo> branches() const;
-    std::vector<ChatMessage> visibleConversation() const;
+    std::size_t completedRequestCount() const;
+    std::size_t summaryEveryRequests() const;
+    bool hasConversationSummary() const;
+    bool inputRejected() const;
+    bool inputSuspicious() const;
+    const std::vector<std::string>& warnings() const;
+    const std::vector<ChatMessage>& visibleConversation() const;
     const TokenStatistics& tokenStatistics() const;
     CostStatistics costStatistics() const;
 
     bool respond(const std::string& userMessage, std::string& answer, std::string& error);
 
 private:
-    struct DialogTurn {
-        std::string user;
-        std::string assistant;
-    };
-
-    struct Branch {
-        std::size_t id = 0;
-        std::size_t parentId = 0;
-        std::string label;
-        std::string direction;
-        std::string checkpoint;
-        std::vector<DialogTurn> checkpointContext;
-        std::vector<DialogTurn> history;
-    };
-
     struct Config {
         std::string model;
+        std::string baseInstruction;
         std::string inputPolicy;
         std::string outputPolicy;
-        std::size_t shortTermMemoryMessages = 10;
+        std::size_t shortTermMemoryMessages = 5;
+        std::size_t summaryEveryRequests = 5;
         std::string longTermMemoryDatabase = "agent_memory.db";
         double inputPricePerMillion = 0.0;
         double cachedInputPricePerMillion = 0.0;
@@ -83,42 +71,41 @@ private:
     };
 
     bool loadConfig(const std::string& configPath, std::string& error);
+    bool applyInputPolicy(const std::string& userMessage, std::string& error);
+    bool containsSecret(const std::string& text) const;
     bool reloadLongTermMemory(std::string& error);
-    bool updateLongTermMemory(const std::string& userMessage, std::string& error);
+    bool updateLongTermMemory(const std::string& userMessage,
+                              const std::string& answer, std::string& error);
+    bool summarizeHistory(std::string& error);
+    bool reviewAnswer(const std::string& userMessage, const std::string& draft,
+                      std::string& finalAnswer, std::string& error);
     std::string buildLongTermMemoryPrompt() const;
-    std::string buildMemoryDecisionConversation(const std::string& userMessage) const;
+    std::string buildMemoryDecisionConversation(const std::string& userMessage,
+                                                const std::string& answer) const;
     std::string buildConversation(const std::string& userMessage) const;
     std::string buildReviewConversation(const std::string& userMessage,
                                         const std::string& draft) const;
-    std::string buildBranchDetectionConversation(const std::string& userMessage) const;
-    bool detectAndCreateBranches(const std::string& userMessage,
-                                 std::string& answer, bool& checkpointCreated,
-                                 std::string& error);
+    std::string buildSummaryConversation(std::size_t messageCount) const;
+    void appendContext(std::string& messages, bool& first) const;
     bool sendTrackedChatCompletion(const std::string& messagesJson, std::string& answer,
                                    std::string& error, bool jsonResponse,
+                                   bool summaryRequest = false,
                                    std::string* finishReason = nullptr);
-    bool reviewAnswer(const std::string& userMessage, const std::string& draft,
-                      std::string& finalAnswer, std::string& error);
-    void appendActiveContext(std::string& messages, bool& first) const;
     void remember(const std::string& userMessage, const std::string& answer);
-    void trimHistory(std::vector<DialogTurn>& history) const;
-    std::vector<DialogTurn> activeContextSnapshot() const;
-    std::vector<DialogTurn>& activeHistory();
-    const std::vector<DialogTurn>& activeHistory() const;
-    Branch* findBranch(std::size_t id);
-    const Branch* findBranch(std::size_t id) const;
 
     Config config_;
     std::string apiKey_;
     ApiClient apiClient_;
     std::unique_ptr<MemoryStore> memoryStore_;
     std::string initializationError_;
-    int strategy_ = 1;
-    std::vector<DialogTurn> shortTermOnlyHistory_;
-    std::vector<DialogTurn> sqliteHistory_;
+    std::vector<ChatMessage> rawHistory_;
+    std::vector<ChatMessage> sessionTranscript_;
     std::vector<LongTermMemoryFact> longTermMemory_;
-    std::vector<Branch> branches_;
-    std::size_t activeBranchId_ = 0;
-    std::size_t nextBranchId_ = 1;
+    std::string conversationSummary_;
+    std::size_t completedRequests_ = 0;
+    bool summaryRetryPending_ = false;
+    bool inputRejected_ = false;
+    bool inputSuspicious_ = false;
+    std::vector<std::string> warnings_;
     TokenStatistics tokenStatistics_;
 };

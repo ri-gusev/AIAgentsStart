@@ -31,6 +31,39 @@ std::string jsonEscape(const std::string& text) {
     return result;
 }
 
+bool readHexCodeUnit(const std::string& json, size_t& position, unsigned& codeUnit) {
+    if (json.size() - position < 4) return false;
+    codeUnit = 0;
+    for (size_t digitIndex = 0; digitIndex < 4; ++digitIndex) {
+        const unsigned char c = static_cast<unsigned char>(json[position++]);
+        unsigned digit = 0;
+        if (c >= '0' && c <= '9') digit = c - '0';
+        else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
+        else return false;
+        codeUnit = codeUnit * 16 + digit;
+    }
+    return true;
+}
+
+void appendUtf8(std::string& result, unsigned codePoint) {
+    if (codePoint <= 0x7F) {
+        result += static_cast<char>(codePoint);
+    } else if (codePoint <= 0x7FF) {
+        result += static_cast<char>(0xC0 | (codePoint >> 6));
+        result += static_cast<char>(0x80 | (codePoint & 0x3F));
+    } else if (codePoint <= 0xFFFF) {
+        result += static_cast<char>(0xE0 | (codePoint >> 12));
+        result += static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F));
+        result += static_cast<char>(0x80 | (codePoint & 0x3F));
+    } else {
+        result += static_cast<char>(0xF0 | (codePoint >> 18));
+        result += static_cast<char>(0x80 | ((codePoint >> 12) & 0x3F));
+        result += static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F));
+        result += static_cast<char>(0x80 | (codePoint & 0x3F));
+    }
+}
+
 std::string extractJsonStringField(const std::string& json, const std::string& field,
                                    size_t from = 0) {
     const auto key = json.find("\"" + field + "\"", from);
@@ -40,22 +73,44 @@ std::string extractJsonStringField(const std::string& json, const std::string& f
     do { ++start; } while (start < json.size() && std::isspace(static_cast<unsigned char>(json[start])));
     if (start >= json.size() || json[start++] != '"') return {};
     std::string result;
-    bool escaped = false;
-    for (; start < json.size(); ++start) {
-        const char c = json[start];
-        if (escaped) {
-            switch (c) {
-            case 'n': result += '\n'; break;
-            case 'r': result += '\r'; break;
-            case 't': result += '\t'; break;
-            case 'b': result += '\b'; break;
-            case 'f': result += '\f'; break;
-            default: result += c; break;
+    while (start < json.size()) {
+        const unsigned char c = static_cast<unsigned char>(json[start++]);
+        if (c == '"') return result;
+        if (c < 0x20) return {};
+        if (c != '\\') {
+            result += static_cast<char>(c);
+            continue;
+        }
+        if (start >= json.size()) return {};
+        switch (json[start++]) {
+        case '"': result += '"'; break;
+        case '\\': result += '\\'; break;
+        case '/': result += '/'; break;
+        case 'n': result += '\n'; break;
+        case 'r': result += '\r'; break;
+        case 't': result += '\t'; break;
+        case 'b': result += '\b'; break;
+        case 'f': result += '\f'; break;
+        case 'u': {
+            unsigned codePoint = 0;
+            if (!readHexCodeUnit(json, start, codePoint)) return {};
+            if (codePoint >= 0xD800 && codePoint <= 0xDBFF) {
+                if (json.size() - start < 6 || json[start] != '\\' ||
+                    json[start + 1] != 'u') return {};
+                start += 2;
+                unsigned lowSurrogate = 0;
+                if (!readHexCodeUnit(json, start, lowSurrogate) ||
+                    lowSurrogate < 0xDC00 || lowSurrogate > 0xDFFF) return {};
+                codePoint = 0x10000 + ((codePoint - 0xD800) << 10) +
+                            (lowSurrogate - 0xDC00);
+            } else if (codePoint >= 0xDC00 && codePoint <= 0xDFFF) {
+                return {};
             }
-            escaped = false;
-        } else if (c == '\\') escaped = true;
-        else if (c == '"') return result;
-        else result += c;
+            appendUtf8(result, codePoint);
+            break;
+        }
+        default: return {};
+        }
     }
     return {};
 }
@@ -180,11 +235,15 @@ std::string extractFinishReason(const std::string& json) {
 std::string explainMissingContent(const std::string& json) {
     const auto choices = json.find("\"choices\"");
     const std::string refusal = extractJsonStringField(json, "refusal", choices);
-    if (!refusal.empty()) return "Model refusal: " + refusal;
+    if (!refusal.empty()) return "The model declined to provide an answer";
 
     const std::string finishReason = extractFinishReason(json);
     std::string error = "OpenAI returned HTTP 200 but choices[0].message.content was empty or null";
-    if (!finishReason.empty()) error += " (finish_reason=" + finishReason + ")";
+    if (finishReason == "stop" || finishReason == "length" ||
+        finishReason == "content_filter" || finishReason == "tool_calls" ||
+        finishReason == "function_call") {
+        error += " (finish_reason=" + finishReason + ")";
+    }
     if (finishReason == "length") error += ". The completion token limit was reached.";
     return error;
 }
@@ -199,6 +258,8 @@ bool ApiClient::sendChatCompletion(const std::string& apiKey, const std::string&
                                    std::string& error, bool jsonResponse,
                                    ApiTokenUsage* usage,
                                    std::string* finishReason) const {
+    answer.clear();
+    error.clear();
     if (usage) *usage = {};
     if (finishReason) finishReason->clear();
     if (!initialized_) { error = "Could not initialize libcurl"; return false; }
@@ -240,7 +301,9 @@ bool ApiClient::sendChatCompletion(const std::string& apiKey, const std::string&
     curl_easy_cleanup(curl);
     if (result != CURLE_OK) { error = curl_easy_strerror(result); return false; }
     if (status < 200 || status >= 300) {
-        error = "OpenAI API returned HTTP " + std::to_string(status) + ": " + response;
+        // Provider error bodies may echo submitted text or credentials. Never
+        // forward their contents to the browser or diagnostic logs.
+        error = "OpenAI API returned HTTP " + std::to_string(status);
         return false;
     }
     if (usage) extractTokenUsage(response, *usage);

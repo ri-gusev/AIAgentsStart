@@ -57,32 +57,68 @@ std::string extractJsonStringField(const std::string& json, const std::string& f
     do { ++start; } while (start < json.size() && std::isspace(static_cast<unsigned char>(json[start])));
     if (start >= json.size() || json[start++] != '"') return {};
     std::string result;
-    bool escaped = false;
-    for (; start < json.size(); ++start) {
-        const char c = json[start];
-        if (escaped) { result += c == 'n' ? '\n' : c == 'r' ? '\r' : c == 't' ? '\t' : c; escaped = false; }
-        else if (c == '\\') escaped = true;
-        else if (c == '"') return result;
-        else result += c;
+    const auto readHex4 = [&json](size_t& position, unsigned& code) {
+        if (json.size() - position < 4) return false;
+        code = 0;
+        for (size_t digitIndex = 0; digitIndex < 4; ++digitIndex) {
+            const unsigned char c = static_cast<unsigned char>(json[position++]);
+            unsigned digit = 0;
+            if (c >= '0' && c <= '9') digit = c - '0';
+            else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
+            else return false;
+            code = code * 16 + digit;
+        }
+        return true;
+    };
+    const auto appendUtf8 = [&result](unsigned code) {
+        if (code <= 0x7F) result += static_cast<char>(code);
+        else if (code <= 0x7FF) {
+            result += static_cast<char>(0xC0 | (code >> 6));
+            result += static_cast<char>(0x80 | (code & 0x3F));
+        } else if (code <= 0xFFFF) {
+            result += static_cast<char>(0xE0 | (code >> 12));
+            result += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+            result += static_cast<char>(0x80 | (code & 0x3F));
+        } else {
+            result += static_cast<char>(0xF0 | (code >> 18));
+            result += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
+            result += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+            result += static_cast<char>(0x80 | (code & 0x3F));
+        }
+    };
+    while (start < json.size()) {
+        const unsigned char c = static_cast<unsigned char>(json[start++]);
+        if (c == '"') return result;
+        if (c < 0x20) return {};
+        if (c != '\\') { result += static_cast<char>(c); continue; }
+        if (start >= json.size()) return {};
+        switch (json[start++]) {
+        case '"': result += '"'; break;
+        case '\\': result += '\\'; break;
+        case '/': result += '/'; break;
+        case 'b': result += '\b'; break;
+        case 'f': result += '\f'; break;
+        case 'n': result += '\n'; break;
+        case 'r': result += '\r'; break;
+        case 't': result += '\t'; break;
+        case 'u': {
+            unsigned code = 0;
+            if (!readHex4(start, code)) return {};
+            if (code >= 0xD800 && code <= 0xDBFF) {
+                if (json.size() - start < 6 || json[start] != '\\' || json[start + 1] != 'u') return {};
+                start += 2;
+                unsigned low = 0;
+                if (!readHex4(start, low) || low < 0xDC00 || low > 0xDFFF) return {};
+                code = 0x10000 + ((code - 0xD800) << 10) + low - 0xDC00;
+            } else if (code >= 0xDC00 && code <= 0xDFFF) return {};
+            appendUtf8(code);
+            break;
+        }
+        default: return {};
+        }
     }
     return {};
-}
-
-bool extractJsonUnsignedField(const std::string& json, const std::string& field,
-                              std::size_t& value) {
-    const auto key = json.find("\"" + field + "\"");
-    if (key == std::string::npos) return false;
-    const auto colon = json.find(':', key + field.size() + 2);
-    if (colon == std::string::npos) return false;
-    const auto start = json.find_first_not_of(" \t\r\n", colon + 1);
-    if (start == std::string::npos ||
-        !std::isdigit(static_cast<unsigned char>(json[start]))) return false;
-    try {
-        value = std::stoull(json.substr(start));
-        return true;
-    } catch (...) {
-        return false;
-    }
 }
 
 std::string buildAgentStateFields(const Agent& agent) {
@@ -93,16 +129,14 @@ std::string buildAgentStateFields(const Agent& agent) {
         stream << std::fixed << std::setprecision(8) << value;
         return stream.str();
     };
-    std::string branchesJson = "[";
+    std::string warningsJson = "[";
     bool first = true;
-    for (const auto& branch : agent.branches()) {
-        if (!first) branchesJson += ',';
+    for (const auto& warning : agent.warnings()) {
+        if (!first) warningsJson += ',';
         first = false;
-        branchesJson += "{\"id\":" + std::to_string(branch.id) +
-                        ",\"label\":\"" + jsonEscape(branch.label) +
-                        "\",\"active\":" + (branch.active ? "true" : "false") + "}";
+        warningsJson += "\"" + jsonEscape(warning) + "\"";
     }
-    branchesJson += ']';
+    warningsJson += ']';
 
     std::string conversationJson = "[";
     first = true;
@@ -115,12 +149,18 @@ std::string buildAgentStateFields(const Agent& agent) {
     conversationJson += ']';
 
     return
-        "\"strategy\":" + std::to_string(agent.strategy()) +
+        "\"input_rejected\":" + std::string(agent.inputRejected() ? "true" : "false") +
+        ",\"input_suspicious\":" + std::string(agent.inputSuspicious() ? "true" : "false") +
+        ",\"warnings\":" + warningsJson +
         ",\"memory\":{\"raw_messages\":" +
         std::to_string(agent.rawHistoryMessageCount()) +
+        ",\"raw_message_limit\":" + std::to_string(agent.rawMessageLimit()) +
+        ",\"pending_summary_messages\":" + std::to_string(agent.pendingSummaryMessageCount()) +
+        ",\"summary_present\":" + std::string(agent.hasConversationSummary() ? "true" : "false") +
+        ",\"completed_requests\":" + std::to_string(agent.completedRequestCount()) +
+        ",\"summary_every_requests\":" + std::to_string(agent.summaryEveryRequests()) +
         ",\"long_term_facts\":" + std::to_string(agent.longTermFactCount()) +
-        ",\"active_branch_id\":" + std::to_string(agent.activeBranchId()) +
-        ",\"branches\":" + branchesJson + "}" +
+        "}" +
         ",\"conversation\":" + conversationJson +
         ",\"usage\":{\"input_tokens\":" + std::to_string(usage.inputTokens) +
         ",\"cached_input_tokens\":" + std::to_string(usage.cachedInputTokens) +
@@ -128,7 +168,12 @@ std::string buildAgentStateFields(const Agent& agent) {
         ",\"total_tokens\":" + std::to_string(usage.totalTokens) +
         ",\"cost_usd\":{\"input\":" + usd(cost.inputUsd) +
         ",\"output\":" + usd(cost.outputUsd) +
-        ",\"total\":" + usd(cost.totalUsd) + "}}";
+        ",\"total\":" + usd(cost.totalUsd) + "}" +
+        ",\"summary\":{\"input_tokens\":" + std::to_string(usage.summaryInputTokens) +
+        ",\"cached_input_tokens\":" + std::to_string(usage.summaryCachedInputTokens) +
+        ",\"output_tokens\":" + std::to_string(usage.summaryOutputTokens) +
+        ",\"total_tokens\":" + std::to_string(usage.summaryTotalTokens) +
+        ",\"cost_usd\":{\"total\":" + usd(cost.summaryUsd) + "}}}";
 }
 
 bool parseContentLength(const std::string& text, size_t& value) {
@@ -230,13 +275,6 @@ int runWebServer(Agent& agent) {
         std::cerr << "Could not start server on http://127.0.0.1:8080\n";
         closesocket(server); WSACleanup(); return 1;
     }
-    std::string resetError;
-    if (!agent.resetAllMemory(resetError)) {
-        std::cerr << "Could not reset agent memory: " << resetError << '\n';
-        closesocket(server);
-        WSACleanup();
-        return 1;
-    }
     gStopRequested.store(false);
     SetConsoleCtrlHandler(handleConsoleSignal, TRUE);
     std::cout << "Open http://127.0.0.1:8080 in your browser\nPress Ctrl+C to stop the server\n";
@@ -264,7 +302,7 @@ int runWebServer(Agent& agent) {
             std::string answer, error;
             if (prompt.empty()) sendHttpResponse(client, 400, "application/json", "{\"error\":\"Message is required\"}");
             else if (!agent.respond(prompt, answer, error)) {
-                sendHttpResponse(client, 500, "application/json",
+                sendHttpResponse(client, agent.inputRejected() ? 400 : 500, "application/json",
                                  "{\"error\":\"" + jsonEscape(error) + "\"," +
                                      buildAgentStateFields(agent) + "}");
             }
@@ -278,31 +316,6 @@ int runWebServer(Agent& agent) {
         } else if (request.method == "GET" && request.path == "/api/state") {
             sendHttpResponse(client, 200, "application/json",
                              "{" + buildAgentStateFields(agent) + "}");
-        } else if (request.method == "POST" && request.path == "/api/strategy") {
-            std::size_t strategy = 0;
-            std::string error;
-            if (!extractJsonUnsignedField(request.body, "strategy", strategy) ||
-                !agent.setStrategy(static_cast<int>(strategy), error)) {
-                sendHttpResponse(client, 400, "application/json",
-                                 "{\"error\":\"" + jsonEscape(
-                                     error.empty() ? "strategy must be 1, 2, or 3" : error) +
-                                     "\"}");
-            } else {
-                sendHttpResponse(client, 200, "application/json",
-                                 "{" + buildAgentStateFields(agent) + "}");
-            }
-        } else if (request.method == "POST" && request.path == "/api/branch") {
-            std::size_t branchId = 0;
-            std::string error;
-            if (!extractJsonUnsignedField(request.body, "branch_id", branchId) ||
-                !agent.selectBranch(branchId, error)) {
-                sendHttpResponse(client, 400, "application/json",
-                                 "{\"error\":\"" + jsonEscape(
-                                     error.empty() ? "branch_id is required" : error) + "\"}");
-            } else {
-                sendHttpResponse(client, 200, "application/json",
-                                 "{" + buildAgentStateFields(agent) + "}");
-            }
         } else {
             std::string fileName, contentType;
             if (request.method == "GET" && request.path == "/") { fileName = "index.html"; contentType = "text/html"; }
