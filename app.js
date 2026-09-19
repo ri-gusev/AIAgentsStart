@@ -14,9 +14,6 @@ const deleteChatConfirmationText = document.querySelector('#deleteChatConfirmati
 const cancelDeleteChatButton = document.querySelector('#cancelDeleteChatButton');
 const confirmDeleteChatButton = document.querySelector('#confirmDeleteChatButton');
 const activeChatName = document.querySelector('#activeChatName');
-const autoModeButton = document.querySelector('#autoModeButton');
-const manualModeButton = document.querySelector('#manualModeButton');
-const modeDescription = document.querySelector('#modeDescription');
 const personalizationForm = document.querySelector('#personalizationForm');
 const personalizationInput = document.querySelector('#personalizationInput');
 const savePersonalizationButton = document.querySelector('#savePersonalizationButton');
@@ -34,13 +31,18 @@ const summaryTokens = document.querySelector('#summaryTokens');
 const summaryCost = document.querySelector('#summaryCost');
 const totalTokens = document.querySelector('#totalTokens');
 const totalCost = document.querySelector('#totalCost');
+const taskStateBadge = document.querySelector('#taskStateBadge');
+const chatStateBanner = document.querySelector('#chatStateBanner');
+const chatStateName = document.querySelector('#chatStateName');
+const chatStateHint = document.querySelector('#chatStateHint');
 
 let requestPending = false;
 let activeChatId = '';
-let memoryMode = 'auto';
 let personalizationDirty = false;
 let serverPersonalization = '';
 let pendingDeleteChatId = '';
+let currentTask = { state: 'planning', plan: '', validation_report: '', paused: false };
+let currentProjectSummary = '';
 
 function closeDeleteConfirmation(restoreFocus = false) {
   pendingDeleteChatId = '';
@@ -53,7 +55,7 @@ function openDeleteConfirmation() {
   if (requestPending || !activeChatId) return;
   pendingDeleteChatId = activeChatId;
   const chatName = chatSelect.selectedOptions[0]?.textContent || activeChatName.textContent || 'выбранный чат';
-  deleteChatConfirmationText.textContent = '«' + chatName + '»: история текущего запуска и рабочая память этого чата будут удалены. Общая долговременная память сохранится.';
+  deleteChatConfirmationText.textContent = '«' + chatName + '»: история, рабочая память, план, task state и project summary будут удалены. Общая долговременная память сохранится.';
   deleteChatConfirmation.hidden = false;
   deleteChatButton.setAttribute('aria-expanded', 'true');
   cancelDeleteChatButton.focus();
@@ -61,20 +63,19 @@ function openDeleteConfirmation() {
 
 function updateControlState() {
   const busy = requestPending;
-  sendButton.disabled = busy || !activeChatId;
-  input.disabled = busy;
+  const taskLocked = currentTask.paused || currentTask.state === 'DONE';
+  sendButton.disabled = busy || !activeChatId || taskLocked;
+  input.disabled = busy || taskLocked;
   chatSelect.disabled = busy;
   chatNameInput.disabled = busy;
   createChatButton.disabled = busy;
   deleteChatButton.disabled = busy || !activeChatId;
   cancelDeleteChatButton.disabled = busy;
   confirmDeleteChatButton.disabled = busy || !pendingDeleteChatId;
-  autoModeButton.disabled = busy;
-  manualModeButton.disabled = busy;
   personalizationInput.disabled = busy;
   savePersonalizationButton.disabled = busy;
-  chatLog.querySelectorAll('.memory-destination').forEach((button) => {
-    button.disabled = busy || memoryMode !== 'manual' || button.dataset.saved === 'true' || button.dataset.target === 'short_term';
+  chatLog.querySelectorAll('.message-task-action').forEach((button) => {
+    button.disabled = busy || !activeChatId;
   });
 }
 
@@ -82,7 +83,7 @@ function formatTokenCount(value) { return Number(value || 0).toLocaleString(); }
 function formatUsd(value) { return '$' + Number(value || 0).toFixed(6); }
 function scrollToLatest() { chatLog.scrollTop = chatLog.scrollHeight; }
 
-function addMessage(role, text = '', scroll = true, metadata = null) {
+function addMessage(role, text = '', scroll = true) {
   chatLog.querySelector('.chat-empty')?.remove();
   const message = document.createElement('article');
   const safeRole = ['user', 'assistant', 'loading', 'error'].includes(role) ? role : 'assistant';
@@ -99,49 +100,92 @@ function addMessage(role, text = '', scroll = true, metadata = null) {
     content.textContent = typeof text === 'string' ? text : '';
   }
   message.append(label, content);
-  if (safeRole === 'user' && metadata?.id) {
-    const actions = document.createElement('div');
-    actions.className = 'message-memory-actions';
-    const messageChatId = activeChatId;
-    const destinations = [
-      ['short_term', 'В краткосрочную', 'В диалоге', metadata.short_term !== false],
-      ['working', 'В рабочую', 'В рабочей ✓', !!metadata.working],
-      ['long_term', 'В долговременную', 'В долговременной ✓', !!metadata.long_term]
-    ];
-    destinations.forEach(([target, title, savedTitle, saved]) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'memory-destination' + (saved ? ' saved' : '');
-      button.dataset.target = target;
-      button.dataset.saved = String(saved);
-      button.textContent = saved ? savedTitle : title;
-      button.title = saved ? 'Эти данные уже направлены в память.' : memoryMode === 'auto' ? 'Для ручного сохранения включите Manual.' : 'Сохранить текст выбранного сообщения в эту память.';
-      button.disabled = requestPending || memoryMode !== 'manual' || saved || target === 'short_term';
-      button.addEventListener('click', () => {
-        if (!button.disabled && memoryMode === 'manual') {
-          mutateState('/api/memory/save', { chat_id: messageChatId, message_id: String(metadata.id), target }, 'Не удалось сохранить данные в память.');
-        }
-      });
-      actions.append(button);
-    });
-    message.append(actions);
-  }
   chatLog.append(message);
   if (scroll) scrollToLatest();
   return message;
+}
+
+function taskAction(label, endpoint, errorText, extraPayload = {}) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'message-task-action';
+  button.textContent = label;
+  button.disabled = requestPending || !activeChatId;
+  button.addEventListener('click', () => {
+    mutateState(endpoint, { chat_id: activeChatId, ...extraPayload }, errorText,
+                { keepPosition: false });
+  });
+  return button;
+}
+
+function renderInlineTaskControls() {
+  const lastAssistant = [...chatLog.querySelectorAll('.chat-message.assistant')].at(-1);
+  if (!lastAssistant) return;
+
+  const controls = document.createElement('div');
+  controls.className = 'message-task-controls';
+  const status = document.createElement('span');
+  status.className = 'message-task-status';
+  status.textContent = currentTask.paused ? currentTask.state + ' · PAUSE' : currentTask.state;
+  controls.append(status);
+
+  if (currentTask.paused) {
+    controls.append(taskAction('Продолжить', '/api/task/resume', 'Не удалось продолжить задачу.'));
+  } else if (currentTask.state === 'planning' && currentTask.plan) {
+    controls.append(
+      taskAction('Утвердить план', '/api/task/approve', 'Не удалось утвердить план.'),
+      taskAction('Переделать план', '/api/task/revise', 'Не удалось переделать план.', { feedback: '' })
+    );
+  } else if (currentTask.state === 'execution') {
+    controls.append(
+      taskAction('Проверить', '/api/task/validation', 'Не удалось перейти к проверке.'),
+      taskAction('Пауза', '/api/task/pause', 'Не удалось поставить задачу на паузу.')
+    );
+  } else if (currentTask.state === 'validation') {
+    if (currentTask.validation_report) {
+      controls.append(
+        taskAction('Вернуться к execution', '/api/task/execution', 'Не удалось вернуться к выполнению.'),
+        taskAction('Повторить проверку', '/api/task/validate', 'Не удалось повторить проверку.')
+      );
+    } else {
+      controls.append(
+        taskAction('Завершить проверку', '/api/task/validate', 'Не удалось выполнить проверку.'),
+        taskAction('Пауза', '/api/task/pause', 'Не удалось поставить задачу на паузу.')
+      );
+    }
+  } else if (currentTask.state === 'DONE') {
+    status.textContent = 'DONE · задача завершена';
+  }
+
+  if (currentTask.validation_report || currentProjectSummary) {
+    const details = document.createElement('details');
+    details.className = 'message-task-details';
+    const summary = document.createElement('summary');
+    summary.textContent = currentProjectSummary ? 'Контекст задачи' : 'Результат проверки';
+    const text = document.createElement('div');
+    text.textContent = currentProjectSummary || currentTask.validation_report;
+    details.append(summary, text);
+    controls.append(details);
+  }
+  lastAssistant.append(controls);
 }
 
 function renderConversation(messages = [], keepPosition = false) {
   const previousTop = chatLog.scrollTop;
   chatLog.replaceChildren();
   if (!Array.isArray(messages) || !messages.length) {
-    const empty = document.createElement('div');
-    empty.className = 'chat-empty';
-    empty.textContent = 'Начните диалог с вопроса.';
-    chatLog.append(empty);
+    if (currentTask.plan) {
+      addMessage('assistant', currentTask.plan, false);
+    } else {
+      const empty = document.createElement('div');
+      empty.className = 'chat-empty';
+      empty.textContent = 'Опишите задачу. Первое сообщение станет этапом planning.';
+      chatLog.append(empty);
+    }
   } else {
-    messages.forEach((message) => addMessage(message.role, message.content, false, message));
+    messages.forEach((message) => addMessage(message.role, message.content, false));
   }
+  renderInlineTaskControls();
   if (keepPosition) chatLog.scrollTop = previousTop;
   else scrollToLatest();
 }
@@ -180,14 +224,39 @@ function showNotice(text) {
   chatNotice.hidden = !text;
 }
 
+function renderTaskState(data) {
+  const allowedStates = ['planning', 'execution', 'validation', 'DONE'];
+  const received = data?.task_state || {};
+  const state = allowedStates.includes(received.state) ? received.state : 'planning';
+  currentTask = {
+    state,
+    plan: typeof received.plan === 'string' ? received.plan : '',
+    validation_report: typeof received.validation_report === 'string' ? received.validation_report : '',
+    paused: received.paused === true
+  };
+  taskStateBadge.textContent = currentTask.paused ? state + ' · PAUSE' : state;
+  taskStateBadge.classList.toggle('paused', currentTask.paused);
+  chatStateBanner.dataset.state = currentTask.paused ? 'paused' : state;
+  chatStateName.textContent = currentTask.paused ? state.toUpperCase() + ' · PAUSE' : state.toUpperCase();
+  const stateHints = {
+    planning: currentTask.plan ? 'Утвердите план или отправьте замечания для новой версии.' : 'Опишите задачу — Agent составит план.',
+    execution: 'Agent выполняет задачу. После получения результата нажмите «Проверить».',
+    validation: currentTask.validation_report ? 'Проверка не пройдена. Верните задачу в execution для исправлений.' : 'Результат проверяется относительно утверждённого плана.',
+    DONE: 'Проверка пройдена, задача завершена.'
+  };
+  chatStateHint.textContent = currentTask.paused ? 'Проект на паузе; состояние и summary сохранены.' : stateHints[state];
+  currentProjectSummary = typeof data.project_summary === 'string' ? data.project_summary : '';
+  input.placeholder = state === 'planning'
+    ? currentTask.plan ? 'Напишите, что изменить в плане…' : 'Опишите новую задачу…'
+    : state === 'execution' ? 'Продолжите работу над задачей…'
+      : state === 'validation' ? 'Добавьте данные перед проверкой…'
+        : 'Задача завершена';
+}
+
 function renderAgentState(data, { renderChat = true, keepPosition = false, forcePersonalization = false } = {}) {
   if (!data || !data.memory) return false;
   activeChatId = String(data.active_chat_id || '');
   activeChatName.textContent = String(data.active_chat_name || 'Чат');
-  memoryMode = data.memory_mode === 'manual' ? 'manual' : 'auto';
-  autoModeButton.setAttribute('aria-pressed', String(memoryMode === 'auto'));
-  manualModeButton.setAttribute('aria-pressed', String(memoryMode === 'manual'));
-  modeDescription.textContent = memoryMode === 'auto' ? 'Agent выбирает, что сохранить.' : 'Выберите память под сообщением.';
   chatSelect.replaceChildren();
   if (Array.isArray(data.chats)) data.chats.forEach((chat) => {
     const option = document.createElement('option');
@@ -201,6 +270,7 @@ function renderAgentState(data, { renderChat = true, keepPosition = false, force
     closeDeleteConfirmation();
   }
   serverPersonalization = typeof data.personalization === 'string' ? data.personalization : '';
+  renderTaskState(data);
   if (!personalizationDirty || forcePersonalization) {
     personalizationInput.value = serverPersonalization;
     personalizationDirty = false;
@@ -263,9 +333,8 @@ async function mutateState(url, payload, errorText, { forcePersonalization = fal
         personalizationInput.value = serverPersonalization;
         personalizationDirty = false;
       }
-      showNotice(url === '/api/memory/save' && data.memory_mode === 'auto'
-        ? 'Для ручного сохранения переключитесь в Manual.'
-        : data.input_rejected ? 'Данные отклонены input policy. Не сохраняйте секреты и опасные команды.' : errorText);
+      showNotice(data.input_rejected && !url.startsWith('/api/task/')
+          ? 'Данные отклонены input policy. Не сохраняйте секреты и опасные команды.' : errorText);
       return false;
     }
     if (!renderAgentState(data, { keepPosition, forcePersonalization })) throw new Error('State response missing');
@@ -366,12 +435,6 @@ confirmDeleteChatButton.addEventListener('click', async () => {
     input.focus();
   }
 });
-autoModeButton.addEventListener('click', () => {
-  if (memoryMode !== 'auto') mutateState('/api/memory-mode', { mode: 'auto' }, 'Не удалось изменить режим памяти.');
-});
-manualModeButton.addEventListener('click', () => {
-  if (memoryMode !== 'manual') mutateState('/api/memory-mode', { mode: 'manual' }, 'Не удалось изменить режим памяти.');
-});
 personalizationInput.addEventListener('input', () => { personalizationDirty = true; });
 personalizationForm.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -383,4 +446,6 @@ personalizationForm.addEventListener('submit', (event) => {
 });
 
 loadAgentState();
-window.addEventListener('focus', () => { if (!requestPending) loadAgentState(); });
+// Do not refresh on window focus: the refresh marks the UI busy and can swallow
+// the first click on actions such as project deletion. Every mutation already
+// returns the complete current Agent state.

@@ -865,6 +865,274 @@ void testChatDeletionTransactionRollback() {
             store.loadWorking(chatId, working, error) && working.size() == 1,
             "Invalid chat id changed SQLite state");
 }
+
+void testTaskStateMachineAndPausePersistence() {
+    Fixture fixture;
+    std::string chatId, error;
+    {
+        Agent agent(fixture.config.string());
+        require(agent.isReady() && agent.taskState().state == "planning" &&
+                agent.taskState().plan.empty() && !agent.taskState().paused &&
+                agent.projectSummary().empty(), "New project state is not empty planning");
+        chatId = agent.activeChatId();
+
+        enqueue("PLAN_V1");
+        enqueue("{\"accepted\":true}");
+        std::string plan;
+        require(agent.generateTaskPlan("Implement a state machine", plan, error) &&
+                plan == "PLAN_V1" && agent.taskState().plan == "PLAN_V1" &&
+                agent.taskState().state == "planning", "Planning did not create an in-memory plan");
+        MemoryStore observer(fixture.database.string());
+        ProjectTaskState stored;
+        std::string storedSummary;
+        require(observer.loadTaskState(chatId, stored, error) && stored.state == "planning" &&
+                stored.plan.empty() && observer.loadProjectSummary(chatId, storedSummary, error) &&
+                storedSummary.empty(), "Planning changed SQLite before a transition or Pause");
+
+        enqueue("EXECUTION_V1");
+        enqueue("{\"accepted\":true}");
+        require(agent.approveTaskPlan(error) && agent.taskState().state == "execution" &&
+                observer.loadTaskState(chatId, stored, error) && stored.state == "execution" &&
+                stored.plan == "PLAN_V1" && !stored.paused,
+                "planning -> execution was not persisted with its plan");
+        require(agent.visibleConversation().size() == 1 &&
+                agent.visibleConversation().back().role == "assistant" &&
+                agent.visibleConversation().back().content.find("Состояние: execution") != std::string::npos &&
+                agent.visibleConversation().back().content.find("EXECUTION_V1") != std::string::npos,
+                "planning -> execution did not create a visible assistant message");
+        require(agent.moveTaskToValidation(error) && agent.taskState().state == "validation" &&
+                observer.loadTaskState(chatId, stored, error) && stored.state == "validation",
+                "execution -> validation was not persisted");
+        require(agent.visibleConversation().size() == 2 &&
+                agent.visibleConversation().back().content.find("Состояние: validation") != std::string::npos,
+                "execution -> validation did not create a visible assistant message");
+
+        const auto failedValidationCall = calls.size();
+        enqueue("{\"passed\":false,\"report\":\"Unit test failed; fix execution\"}");
+        bool passed = true;
+        require(agent.validateTask(passed, error) && !passed &&
+                agent.taskState().state == "validation" &&
+                agent.taskState().validationReport == "Unit test failed; fix execution" &&
+                observer.loadTaskState(chatId, stored, error) && stored.state == "validation" &&
+                stored.validationReport == "Unit test failed; fix execution",
+                "Failed validation did not remain in persisted validation");
+        require(agent.visibleConversation().back().content.find("Состояние: validation") != std::string::npos &&
+                agent.visibleConversation().back().content.find("Unit test failed; fix execution") != std::string::npos,
+                "Failed validation did not create a visible validation report");
+        require(calls.size() == failedValidationCall + 1 && calls.back().json,
+                "Validation used the wrong number or format of LLM calls");
+        contains(calls.back().messages, "PLAN_V1");
+
+        enqueue("REWORKED_AFTER_FAILED_VALIDATION");
+        enqueue("{\"accepted\":true}");
+        require(agent.returnTaskToExecution(error) && agent.taskState().state == "execution" &&
+                observer.loadTaskState(chatId, stored, error) && stored.state == "execution" &&
+                agent.visibleConversation().back().content.find("Состояние: execution") != std::string::npos &&
+                agent.visibleConversation().back().content.find("REWORKED_AFTER_FAILED_VALIDATION") != std::string::npos,
+                "Failed validation could not be explicitly returned to execution");
+        require(agent.moveTaskToValidation(error), "Could not re-enter validation");
+        enqueue("{\"passed\":true,\"report\":\"All planned checks passed\"}");
+        passed = false;
+        require(agent.validateTask(passed, error) && passed && agent.taskState().state == "DONE" &&
+                observer.loadTaskState(chatId, stored, error) && stored.state == "DONE" &&
+                stored.validationReport == "All planned checks passed",
+                "Successful validation did not persist DONE");
+        require(agent.visibleConversation().back().content.find("Состояние: DONE") != std::string::npos &&
+                agent.visibleConversation().back().content.find("All planned checks passed") != std::string::npos,
+                "Successful validation did not create a visible DONE report");
+
+        const auto beforePause = calls.size();
+        enqueue("PROJECT_PAUSE_SUMMARY");
+        require(agent.pauseTask(error) && agent.taskState().paused &&
+                agent.projectSummary() == "PROJECT_PAUSE_SUMMARY" &&
+                calls.size() == beforePause + 1 && !calls.back().json,
+                "Pause did not create exactly one plain-text project summary");
+        contains(calls.back().messages, "PLAN_V1");
+        contains(calls.back().messages, "All planned checks passed");
+        require(observer.loadTaskState(chatId, stored, error) && stored.state == "DONE" &&
+                stored.paused && observer.loadProjectSummary(chatId, storedSummary, error) &&
+                storedSummary == "PROJECT_PAUSE_SUMMARY",
+                "Pause did not atomically persist task state and project summary");
+
+        const auto beforeResume = calls.size();
+        require(agent.resumeTask(error) && !agent.taskState().paused &&
+                calls.size() == beforeResume && observer.loadTaskState(chatId, stored, error) &&
+                !stored.paused && observer.loadProjectSummary(chatId, storedSummary, error) &&
+                storedSummary == "PROJECT_PAUSE_SUMMARY",
+                "Resume called LLM, changed summary, or was not persisted");
+        std::string answer = "stale";
+        require(!agent.respond("Extra work after done", answer, error) && answer.empty() &&
+                agent.inputRejected() && calls.size() == beforeResume,
+                "DONE accepted another chat request");
+    }
+
+    Agent restored(fixture.config.string());
+    require(restored.isReady() && restored.activeChatId() == chatId &&
+            restored.taskState().state == "DONE" && restored.taskState().plan == "PLAN_V1" &&
+            !restored.taskState().paused &&
+            restored.taskState().validationReport == "All planned checks passed" &&
+            restored.projectSummary() == "PROJECT_PAUSE_SUMMARY" &&
+            restored.visibleConversation().empty(),
+            "Task state/project summary did not restore or session history leaked after restart");
+    require(restored.deleteChat(chatId, error) && restored.chats().size() == 1 &&
+            restored.activeChatId() != chatId && restored.taskState().state == "planning" &&
+            restored.taskState().plan.empty() && restored.projectSummary().empty(),
+            "Deleting the final project did not create empty replacement project rows");
+    sqlite3* rawDatabase = nullptr;
+    require(sqlite3_open(fixture.database.string().c_str(), &rawDatabase) == SQLITE_OK,
+            "Could not inspect deleted project rows");
+    sqlite3_stmt* statement = nullptr;
+    const char* countSql =
+        "SELECT (SELECT COUNT(*) FROM project_summaries WHERE chat_id=?1) + "
+        "(SELECT COUNT(*) FROM project_task_states WHERE chat_id=?1);";
+    const bool prepared = sqlite3_prepare_v2(rawDatabase, countSql, -1, &statement, nullptr) == SQLITE_OK;
+    if (prepared) sqlite3_bind_int64(statement, 1, std::stoll(chatId));
+    const bool noDeletedRows = prepared && sqlite3_step(statement) == SQLITE_ROW &&
+                               sqlite3_column_int(statement, 0) == 0;
+    if (statement) sqlite3_finalize(statement);
+    sqlite3_close(rawDatabase);
+    require(noDeletedRows, "Deleted project kept summary/task-state rows");
+}
+
+void testChatDrivenPlanningAndAutomaticMemory() {
+    Fixture fixture;
+    Agent agent(fixture.config.string());
+    std::string answer, error;
+    require(agent.isReady() && agent.setMemoryMode("manual", error),
+            "Could not seed legacy Manual mode");
+
+    enqueue("PLAN_FROM_FIRST_MESSAGE");
+    enqueue("{\"accepted\":true}");
+    enqueue("{\"working_facts\":[{\"key\":\"task.stack\",\"value\":\"C++17\"}],"
+            "\"long_term_facts\":[]}");
+    require(agent.handleChatMessage(agent.activeChatId(), "Build a C++17 application", answer, error) &&
+            answer == "PLAN_FROM_FIRST_MESSAGE" && agent.memoryMode() == "auto" &&
+            agent.taskState().state == "planning" &&
+            agent.taskState().plan == "PLAN_FROM_FIRST_MESSAGE" &&
+            agent.visibleConversation().size() == 2 &&
+            agent.visibleConversation()[0].role == "user" &&
+            agent.visibleConversation()[0].content == "Build a C++17 application" &&
+            agent.visibleConversation()[1].role == "assistant" &&
+            agent.visibleConversation()[1].content == "PLAN_FROM_FIRST_MESSAGE",
+            "First web-chat message did not become an inline planning turn with Auto routing");
+    hasFact(agent.workingMemoryFacts(), "task.stack", "C++17");
+
+    enqueue("REVISED_INLINE_PLAN");
+    enqueue("{\"accepted\":true}");
+    enqueue("{\"working_facts\":[],\"long_term_facts\":[]}");
+    require(agent.handleChatMessage(agent.activeChatId(), "Add integration tests", answer, error) &&
+            answer == "REVISED_INLINE_PLAN" &&
+            agent.taskState().state == "planning" &&
+            agent.taskState().plan == "REVISED_INLINE_PLAN" &&
+            agent.visibleConversation().size() == 4 &&
+            agent.visibleConversation()[2].content == "Add integration tests" &&
+            agent.visibleConversation()[3].content == "REVISED_INLINE_PLAN",
+            "Planning feedback was not rendered as another chat turn");
+
+    enqueue("INLINE_EXECUTION_RESULT");
+    enqueue("{\"accepted\":true}");
+    require(agent.approveTaskPlan(error) && agent.taskState().state == "execution" &&
+            agent.visibleConversation().size() == 5 &&
+            agent.visibleConversation().back().content.find("Состояние: execution") != std::string::npos &&
+            agent.visibleConversation().back().content.find("INLINE_EXECUTION_RESULT") != std::string::npos,
+            "Inline planning could not be approved");
+    enqueue("EXECUTION_ANSWER");
+    enqueue("{\"accepted\":true}");
+    enqueue("{\"working_facts\":[],\"long_term_facts\":[]}");
+    require(agent.handleChatMessage(agent.activeChatId(), "Start implementation", answer, error) &&
+            answer.find("Состояние: execution") != std::string::npos &&
+            answer.find("EXECUTION_ANSWER") != std::string::npos &&
+            agent.visibleConversation().size() == 7,
+            "Approved task did not continue as a normal execution chat");
+
+    require(agent.moveTaskToValidation(error) && agent.taskState().state == "validation",
+            "Could not enter validation before applying mid-validation corrections");
+    enqueue("EXECUTION_WITH_VALIDATION_CORRECTION");
+    enqueue("{\"accepted\":true}");
+    enqueue("{\"working_facts\":[],\"long_term_facts\":[]}");
+    require(agent.handleChatMessage(agent.activeChatId(), "Also support offline mode", answer, error) &&
+            agent.taskState().state == "execution" &&
+            answer.find("возвращена из validation") != std::string::npos &&
+            answer.find("EXECUTION_WITH_VALIDATION_CORRECTION") != std::string::npos &&
+            agent.visibleConversation().back().content.find("Also support offline mode") == std::string::npos,
+            "A chat correction during validation was not applied as execution work");
+    require(replies.empty(), "Chat-driven planning left unused mock replies");
+}
+
+void testPauseTransactionRollback() {
+    Fixture fixture;
+    MemoryStore store(fixture.database.string());
+    std::string chatId, error;
+    require(store.isReady() && store.createChat("Atomic pause", chatId, error),
+            "Could not create atomic-pause chat");
+    ProjectTaskState original;
+    original.state = "execution";
+    original.plan = "ORIGINAL_PLAN";
+    require(store.saveTaskState(chatId, original, error) &&
+            store.saveProjectPause(chatId, "OLD_SUMMARY", original, error),
+            "Could not seed pause rollback data");
+
+    sqlite3* rawDatabase = nullptr;
+    const int openResult = sqlite3_open(fixture.database.string().c_str(), &rawDatabase);
+    char* sqliteError = nullptr;
+    int triggerResult = SQLITE_ERROR;
+    if (openResult == SQLITE_OK) {
+        triggerResult = sqlite3_exec(rawDatabase,
+            "CREATE TRIGGER prevent_task_pause BEFORE UPDATE ON project_task_states "
+            "BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+            nullptr, nullptr, &sqliteError);
+    }
+    const std::string triggerError = sqliteError ? sqliteError : "";
+    sqlite3_free(sqliteError);
+    if (rawDatabase) sqlite3_close(rawDatabase);
+    require(openResult == SQLITE_OK && triggerResult == SQLITE_OK,
+            "Could not install pause rollback trigger: " + triggerError);
+
+    auto paused = original;
+    paused.paused = true;
+    require(!store.saveProjectPause(chatId, "NEW_SUMMARY", paused, error),
+            "Trigger-protected pause unexpectedly succeeded");
+    ProjectTaskState stored;
+    std::string summary;
+    require(store.loadTaskState(chatId, stored, error) &&
+            store.loadProjectSummary(chatId, summary, error) &&
+            stored.state == "execution" && stored.plan == "ORIGINAL_PLAN" &&
+            !stored.paused && summary == "OLD_SUMMARY",
+            "Failed Pause did not roll back task state and project summary together");
+}
+
+void testLegacyChatProjectBackfill() {
+    Fixture fixture;
+    sqlite3* rawDatabase = nullptr;
+    const int openResult = sqlite3_open(fixture.database.string().c_str(), &rawDatabase);
+    char* sqliteError = nullptr;
+    int schemaResult = SQLITE_ERROR;
+    if (openResult == SQLITE_OK) {
+        schemaResult = sqlite3_exec(rawDatabase,
+            "CREATE TABLE chats(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);"
+            "INSERT INTO chats(name) VALUES('Legacy project');",
+            nullptr, nullptr, &sqliteError);
+    }
+    const std::string schemaError = sqliteError ? sqliteError : "";
+    sqlite3_free(sqliteError);
+    if (rawDatabase) sqlite3_close(rawDatabase);
+    require(openResult == SQLITE_OK && schemaResult == SQLITE_OK,
+            "Could not prepare legacy database: " + schemaError);
+
+    Agent agent(fixture.config.string());
+    require(agent.isReady() && agent.chats().size() == 1 &&
+            agent.activeChatName() == "Legacy project" &&
+            agent.taskState().state == "planning" && agent.taskState().plan.empty() &&
+            !agent.taskState().paused && agent.projectSummary().empty(),
+            "Existing chat was not backfilled with default project rows");
+    MemoryStore observer(fixture.database.string());
+    ProjectTaskState stored;
+    std::string summary, error;
+    require(observer.loadTaskState(agent.activeChatId(), stored, error) &&
+            observer.loadProjectSummary(agent.activeChatId(), summary, error) &&
+            stored.state == "planning" && stored.plan.empty() && !stored.paused && summary.empty(),
+            "Backfilled project rows were not persisted");
+}
 } // namespace
 
 ApiClient::ApiClient() : initialized_(true) {}
@@ -906,7 +1174,11 @@ int main() {
         {"routing schema and secret filtering in separate containers", testRoutingSchemaAndSecretSeparation},
         {"existing SQLite secrets stay filtered after Auto/Manual reloads", testExistingSecretRowsStayFilteredAfterMemoryReloads},
         {"chat deletion removes only private state and persists", testChatDeletionRemovesOnlyPrivateState},
-        {"chat deletion transaction rolls back atomically", testChatDeletionTransactionRollback}
+        {"chat deletion transaction rolls back atomically", testChatDeletionTransactionRollback},
+        {"task state transitions, validation, Pause and restart persistence", testTaskStateMachineAndPausePersistence},
+        {"first chat message plans inline and memory routing stays automatic", testChatDrivenPlanningAndAutomaticMemory},
+        {"Pause summary and task state roll back atomically", testPauseTransactionRollback},
+        {"legacy chats receive empty project state and summary rows", testLegacyChatProjectBackfill}
     };
     unsigned passed = 0;
     for (const auto& test : tests) {

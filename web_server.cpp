@@ -210,8 +210,12 @@ std::string buildAgentStateFields(const Agent& agent) {
         ",\"chats\":" + chatsJson +
         ",\"active_chat_id\":\"" + jsonEscape(agent.activeChatId()) + "\"" +
         ",\"active_chat_name\":\"" + jsonEscape(agent.activeChatName()) + "\"" +
-        ",\"memory_mode\":\"" + jsonEscape(agent.memoryMode()) + "\"" +
         ",\"personalization\":\"" + jsonEscape(agent.personalization()) + "\"" +
+        ",\"task_state\":{\"state\":\"" + jsonEscape(agent.taskState().state) +
+        "\",\"plan\":\"" + jsonEscape(agent.taskState().plan) +
+        "\",\"validation_report\":\"" + jsonEscape(agent.taskState().validationReport) +
+        "\",\"paused\":" + std::string(agent.taskState().paused ? "true" : "false") + "}" +
+        ",\"project_summary\":\"" + jsonEscape(agent.projectSummary()) + "\"" +
         ",\"working_memory\":" + factsJson(agent.workingMemoryFacts()) +
         ",\"long_term_memory\":" + factsJson(agent.longTermMemoryFacts()) +
         ",\"memory\":{\"raw_messages\":" +
@@ -375,8 +379,8 @@ int runWebServer(Agent& agent) {
                 sendHttpResponse(client, 400, "application/json",
                                  "{\"error\":\"A valid chat_id is required\"," +
                                      buildAgentStateFields(agent) + "}");
-            } else if (!(chatIdPresent ? agent.respondInChat(chatId, prompt, answer, error)
-                                     : agent.respond(prompt, answer, error))) {
+            } else if (!(chatIdPresent ? agent.handleChatMessage(chatId, prompt, answer, error)
+                                     : agent.handleChatMessage(agent.activeChatId(), prompt, answer, error))) {
                 sendHttpResponse(client, agent.inputRejected() ? 400 : 500, "application/json",
                                  "{\"error\":\"" + jsonEscape(error) + "\"," +
                                      buildAgentStateFields(agent) + "}");
@@ -391,8 +395,11 @@ int runWebServer(Agent& agent) {
         } else if (request.method == "POST" &&
                    (request.path == "/api/chats" || request.path == "/api/chats/select" ||
                     request.path == "/api/chats/delete" ||
-                    request.path == "/api/memory-mode" || request.path == "/api/personalization" ||
-                    request.path == "/api/memory/save")) {
+                    request.path == "/api/personalization" || request.path == "/api/task/plan" ||
+                    request.path == "/api/task/revise" || request.path == "/api/task/approve" ||
+                    request.path == "/api/task/validation" || request.path == "/api/task/validate" ||
+                    request.path == "/api/task/execution" ||
+                    request.path == "/api/task/pause" || request.path == "/api/task/resume")) {
             std::string error;
             bool success = false;
             if (request.path == "/api/chats") {
@@ -410,23 +417,50 @@ int runWebServer(Agent& agent) {
                 if (!extractJsonStringField(request.body, "chat_id", chatId) || chatId.empty()) {
                     error = "chat_id is required";
                 } else success = agent.deleteChat(chatId, error);
-            } else if (request.path == "/api/memory-mode") {
-                std::string mode;
-                if (!extractJsonStringField(request.body, "mode", mode) || mode.empty()) {
-                    error = "Memory mode is required";
-                } else success = agent.setMemoryMode(mode, error);
             } else if (request.path == "/api/personalization") {
                 std::string text;
                 if (!extractJsonStringField(request.body, "text", text)) {
                     error = "Personalization text field is required";
                 } else success = agent.setPersonalization(text, error);
             } else {
-                std::string chatId, messageId, target;
-                if (!extractJsonStringField(request.body, "chat_id", chatId) || chatId.empty() ||
-                    !extractJsonStringField(request.body, "message_id", messageId) || messageId.empty() ||
-                    !extractJsonStringField(request.body, "target", target) || target.empty()) {
-                    error = "chat_id, message_id and target are required";
-                } else success = agent.saveMessageToMemory(chatId, messageId, target, error);
+                std::string chatId;
+                if (!extractJsonStringField(request.body, "chat_id", chatId) || chatId.empty()) {
+                    error = "chat_id is required";
+                } else if (!agent.selectChat(chatId, error)) {
+                    success = false;
+                } else if (request.path == "/api/task/plan") {
+                    std::string taskRequest, plan;
+                    if (!extractJsonStringField(request.body, "task_request", taskRequest) ||
+                        taskRequest.empty()) error = "task_request is required";
+                    else success = agent.handleChatMessage(chatId, taskRequest, plan, error);
+                } else if (request.path == "/api/task/revise") {
+                    std::string feedback, plan;
+                    if (!extractJsonStringField(request.body, "feedback", feedback)) {
+                        error = "feedback field is required";
+                    } else {
+                        if (feedback.empty()) {
+                            feedback = "Переделай план: сделай его яснее, полнее и добавь проверяемые шаги.";
+                        }
+                        success = agent.handleChatMessage(chatId, feedback, plan, error);
+                    }
+                } else if (request.path == "/api/task/approve") {
+                    success = agent.approveTaskPlan(error);
+                } else if (request.path == "/api/task/validation") {
+                    success = agent.moveTaskToValidation(error);
+                    if (success) {
+                        bool passed = false;
+                        success = agent.validateTask(passed, error);
+                    }
+                } else if (request.path == "/api/task/validate") {
+                    bool passed = false;
+                    success = agent.validateTask(passed, error);
+                } else if (request.path == "/api/task/execution") {
+                    success = agent.returnTaskToExecution(error);
+                } else if (request.path == "/api/task/pause") {
+                    success = agent.pauseTask(error);
+                } else if (request.path == "/api/task/resume") {
+                    success = agent.resumeTask(error);
+                }
             }
             if (success) {
                 sendHttpResponse(client, 200, "application/json", "{" +

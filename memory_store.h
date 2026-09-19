@@ -15,6 +15,13 @@ struct StoredChat {
     std::string name;
 };
 
+struct ProjectTaskState {
+    std::string state = "planning";
+    std::string plan;
+    std::string validationReport;
+    bool paused = false;
+};
+
 class MemoryStore {
 public:
     explicit MemoryStore(const std::string& databasePath);
@@ -29,8 +36,17 @@ public:
     bool upsert(const LongTermMemoryFact& fact, std::string& error);
     bool loadChats(std::vector<StoredChat>& chats, std::string& error) const;
     bool createChat(const std::string& name, std::string& id, std::string& error);
+    bool ensureProjectData(const std::string& chatId, std::string& error);
     bool deleteChat(const std::string& chatId, std::string& replacementId,
                     std::string& error);
+    bool loadProjectSummary(const std::string& chatId, std::string& summary,
+                            std::string& error) const;
+    bool saveProjectPause(const std::string& chatId, const std::string& summary,
+                          const ProjectTaskState& taskState, std::string& error);
+    bool loadTaskState(const std::string& chatId, ProjectTaskState& taskState,
+                       std::string& error) const;
+    bool saveTaskState(const std::string& chatId, const ProjectTaskState& taskState,
+                       std::string& error);
     bool loadWorking(const std::string& chatId, std::vector<LongTermMemoryFact>& facts,
                      std::string& error) const;
     bool upsertWorking(const std::string& chatId, const LongTermMemoryFact& fact,

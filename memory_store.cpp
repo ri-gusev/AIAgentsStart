@@ -24,6 +24,19 @@ constexpr const char* kCreateTableSql =
     "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
     "PRIMARY KEY(chat_id, memory_key)"
     ");"
+    "CREATE TABLE IF NOT EXISTS project_summaries ("
+    "chat_id INTEGER PRIMARY KEY REFERENCES chats(id),"
+    "summary TEXT NOT NULL DEFAULT '',"
+    "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+    ");"
+    "CREATE TABLE IF NOT EXISTS project_task_states ("
+    "chat_id INTEGER PRIMARY KEY REFERENCES chats(id),"
+    "state TEXT NOT NULL DEFAULT 'planning' CHECK(state IN ('planning','execution','validation','DONE')),"
+    "plan TEXT NOT NULL DEFAULT '',"
+    "validation_report TEXT NOT NULL DEFAULT '',"
+    "paused INTEGER NOT NULL DEFAULT 0 CHECK(paused IN (0,1)),"
+    "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+    ");"
     "CREATE TABLE IF NOT EXISTS agent_settings ("
     "setting_key TEXT PRIMARY KEY NOT NULL,"
     "setting_value TEXT NOT NULL"
@@ -65,6 +78,15 @@ bool bindChatId(sqlite3* database, sqlite3_stmt* statement, int index,
         return false;
     }
     if (sqlite3_bind_int64(statement, index, chatId) != SQLITE_OK) {
+        error = sqlite3_errmsg(database);
+        return false;
+    }
+    return true;
+}
+
+bool bindInt(sqlite3* database, sqlite3_stmt* statement, int index,
+             int value, std::string& error) {
+    if (sqlite3_bind_int(statement, index, value) != SQLITE_OK) {
         error = sqlite3_errmsg(database);
         return false;
     }
@@ -180,12 +202,175 @@ bool MemoryStore::createChat(const std::string& name, std::string& id, std::stri
     error.clear();
     if (!isReady()) { error = initializationError_; return false; }
     if (name.empty()) { error = "Chat name must not be empty"; return false; }
+    if (!execute(database_, "BEGIN IMMEDIATE;", error)) return false;
+    bool success = true;
+    {
+        Statement statement(nullptr, sqlite3_finalize);
+        success = prepare(database_, "INSERT INTO chats(name) VALUES(?1);", statement, error) &&
+                  bindText(database_, statement.get(), 1, name, error) &&
+                  stepDone(database_, statement.get(), error);
+        if (success) id = std::to_string(sqlite3_last_insert_rowid(database_));
+    }
+    if (success) {
+        Statement statement(nullptr, sqlite3_finalize);
+        success = prepare(database_, "INSERT INTO project_summaries(chat_id) VALUES(?1);",
+                          statement, error) &&
+                  bindChatId(database_, statement.get(), 1, id, error) &&
+                  stepDone(database_, statement.get(), error);
+    }
+    if (success) {
+        Statement statement(nullptr, sqlite3_finalize);
+        success = prepare(database_, "INSERT INTO project_task_states(chat_id) VALUES(?1);",
+                          statement, error) &&
+                  bindChatId(database_, statement.get(), 1, id, error) &&
+                  stepDone(database_, statement.get(), error);
+    }
+    if (success && execute(database_, "COMMIT;", error)) return true;
+    std::string ignoredRollbackError;
+    execute(database_, "ROLLBACK;", ignoredRollbackError);
+    id.clear();
+    return false;
+}
+
+bool MemoryStore::ensureProjectData(const std::string& chatId, std::string& error) {
+    error.clear();
+    if (!isReady()) { error = initializationError_; return false; }
+    if (!execute(database_, "BEGIN IMMEDIATE;", error)) return false;
+    bool success = true;
+    {
+        Statement statement(nullptr, sqlite3_finalize);
+        success = prepare(database_, "INSERT OR IGNORE INTO project_summaries(chat_id) VALUES(?1);",
+                          statement, error) &&
+                  bindChatId(database_, statement.get(), 1, chatId, error) &&
+                  stepDone(database_, statement.get(), error);
+    }
+    if (success) {
+        Statement statement(nullptr, sqlite3_finalize);
+        success = prepare(database_, "INSERT OR IGNORE INTO project_task_states(chat_id) VALUES(?1);",
+                          statement, error) &&
+                  bindChatId(database_, statement.get(), 1, chatId, error) &&
+                  stepDone(database_, statement.get(), error);
+    }
+    if (success && execute(database_, "COMMIT;", error)) return true;
+    std::string ignoredRollbackError;
+    execute(database_, "ROLLBACK;", ignoredRollbackError);
+    return false;
+}
+
+bool MemoryStore::loadProjectSummary(const std::string& chatId, std::string& summary,
+                                     std::string& error) const {
+    summary.clear();
+    error.clear();
+    if (!isReady()) { error = initializationError_; return false; }
     Statement statement(nullptr, sqlite3_finalize);
-    if (!prepare(database_, "INSERT INTO chats(name) VALUES(?1);", statement, error) ||
-        !bindText(database_, statement.get(), 1, name, error) ||
-        !stepDone(database_, statement.get(), error)) return false;
-    id = std::to_string(sqlite3_last_insert_rowid(database_));
-    return true;
+    if (!prepare(database_, "SELECT summary FROM project_summaries WHERE chat_id=?1;",
+                 statement, error) || !bindChatId(database_, statement.get(), 1, chatId, error)) {
+        return false;
+    }
+    const int result = sqlite3_step(statement.get());
+    if (result == SQLITE_DONE) return true;
+    if (result == SQLITE_ROW) {
+        summary = columnText(statement.get(), 0);
+        if (sqlite3_step(statement.get()) == SQLITE_DONE) return true;
+        summary.clear();
+        error = sqlite3_errmsg(database_);
+        return false;
+    }
+    error = sqlite3_errmsg(database_);
+    return false;
+}
+
+bool MemoryStore::saveProjectPause(const std::string& chatId, const std::string& summary,
+                                   const ProjectTaskState& taskState, std::string& error) {
+    error.clear();
+    if (!isReady()) { error = initializationError_; return false; }
+    if (taskState.state != "planning" && taskState.state != "execution" &&
+        taskState.state != "validation" && taskState.state != "DONE") {
+        error = "Invalid task state";
+        return false;
+    }
+    if (!execute(database_, "BEGIN IMMEDIATE;", error)) return false;
+    bool success = true;
+    {
+        Statement statement(nullptr, sqlite3_finalize);
+        const char* sql =
+            "INSERT INTO project_summaries(chat_id, summary, updated_at) VALUES(?1, ?2, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(chat_id) DO UPDATE SET summary=excluded.summary, updated_at=CURRENT_TIMESTAMP;";
+        success = prepare(database_, sql, statement, error) &&
+                  bindChatId(database_, statement.get(), 1, chatId, error) &&
+                  bindText(database_, statement.get(), 2, summary, error) &&
+                  stepDone(database_, statement.get(), error);
+    }
+    if (success) {
+        Statement statement(nullptr, sqlite3_finalize);
+        const char* sql =
+            "INSERT INTO project_task_states(chat_id, state, plan, validation_report, paused, updated_at) "
+            "VALUES(?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(chat_id) DO UPDATE SET state=excluded.state, plan=excluded.plan, "
+            "validation_report=excluded.validation_report, paused=excluded.paused, "
+            "updated_at=CURRENT_TIMESTAMP;";
+        success = prepare(database_, sql, statement, error) &&
+                  bindChatId(database_, statement.get(), 1, chatId, error) &&
+                  bindText(database_, statement.get(), 2, taskState.state, error) &&
+                  bindText(database_, statement.get(), 3, taskState.plan, error) &&
+                  bindText(database_, statement.get(), 4, taskState.validationReport, error) &&
+                  bindInt(database_, statement.get(), 5, taskState.paused ? 1 : 0, error) &&
+                  stepDone(database_, statement.get(), error);
+    }
+    if (success && execute(database_, "COMMIT;", error)) return true;
+    std::string ignoredRollbackError;
+    execute(database_, "ROLLBACK;", ignoredRollbackError);
+    return false;
+}
+
+bool MemoryStore::loadTaskState(const std::string& chatId, ProjectTaskState& taskState,
+                                std::string& error) const {
+    taskState = ProjectTaskState{};
+    error.clear();
+    if (!isReady()) { error = initializationError_; return false; }
+    Statement statement(nullptr, sqlite3_finalize);
+    if (!prepare(database_, "SELECT state, plan, validation_report, paused "
+                            "FROM project_task_states WHERE chat_id=?1;", statement, error) ||
+        !bindChatId(database_, statement.get(), 1, chatId, error)) return false;
+    const int result = sqlite3_step(statement.get());
+    if (result == SQLITE_DONE) return true;
+    if (result == SQLITE_ROW) {
+        taskState.state = columnText(statement.get(), 0);
+        taskState.plan = columnText(statement.get(), 1);
+        taskState.validationReport = columnText(statement.get(), 2);
+        taskState.paused = sqlite3_column_int(statement.get(), 3) != 0;
+        if (sqlite3_step(statement.get()) == SQLITE_DONE) return true;
+        taskState = ProjectTaskState{};
+        error = sqlite3_errmsg(database_);
+        return false;
+    }
+    error = sqlite3_errmsg(database_);
+    return false;
+}
+
+bool MemoryStore::saveTaskState(const std::string& chatId, const ProjectTaskState& taskState,
+                                std::string& error) {
+    error.clear();
+    if (!isReady()) { error = initializationError_; return false; }
+    if (taskState.state != "planning" && taskState.state != "execution" &&
+        taskState.state != "validation" && taskState.state != "DONE") {
+        error = "Invalid task state";
+        return false;
+    }
+    Statement statement(nullptr, sqlite3_finalize);
+    const char* sql =
+        "INSERT INTO project_task_states(chat_id, state, plan, validation_report, paused, updated_at) "
+        "VALUES(?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(chat_id) DO UPDATE SET state=excluded.state, plan=excluded.plan, "
+        "validation_report=excluded.validation_report, paused=excluded.paused, "
+        "updated_at=CURRENT_TIMESTAMP;";
+    return prepare(database_, sql, statement, error) &&
+           bindChatId(database_, statement.get(), 1, chatId, error) &&
+           bindText(database_, statement.get(), 2, taskState.state, error) &&
+           bindText(database_, statement.get(), 3, taskState.plan, error) &&
+           bindText(database_, statement.get(), 4, taskState.validationReport, error) &&
+           bindInt(database_, statement.get(), 5, taskState.paused ? 1 : 0, error) &&
+           stepDone(database_, statement.get(), error);
 }
 
 bool MemoryStore::deleteChat(const std::string& chatId, std::string& replacementId,
@@ -211,6 +396,22 @@ bool MemoryStore::deleteChat(const std::string& chatId, std::string& replacement
                 success = false;
             }
         }
+    }
+
+    if (success) {
+        Statement statement(nullptr, sqlite3_finalize);
+        success = prepare(database_, "DELETE FROM project_summaries WHERE chat_id=?1;",
+                          statement, error) &&
+                  bindChatId(database_, statement.get(), 1, chatId, error) &&
+                  stepDone(database_, statement.get(), error);
+    }
+
+    if (success) {
+        Statement statement(nullptr, sqlite3_finalize);
+        success = prepare(database_, "DELETE FROM project_task_states WHERE chat_id=?1;",
+                          statement, error) &&
+                  bindChatId(database_, statement.get(), 1, chatId, error) &&
+                  stepDone(database_, statement.get(), error);
     }
 
     if (success) {
@@ -254,6 +455,22 @@ bool MemoryStore::deleteChat(const std::string& chatId, std::string& replacement
                   bindText(database_, statement.get(), 1, defaultName, error) &&
                   stepDone(database_, statement.get(), error);
         if (success) replacementId = std::to_string(sqlite3_last_insert_rowid(database_));
+    }
+
+    if (success && !replacementId.empty()) {
+        Statement statement(nullptr, sqlite3_finalize);
+        success = prepare(database_, "INSERT INTO project_summaries(chat_id) VALUES(?1);",
+                          statement, error) &&
+                  bindChatId(database_, statement.get(), 1, replacementId, error) &&
+                  stepDone(database_, statement.get(), error);
+    }
+
+    if (success && !replacementId.empty()) {
+        Statement statement(nullptr, sqlite3_finalize);
+        success = prepare(database_, "INSERT INTO project_task_states(chat_id) VALUES(?1);",
+                          statement, error) &&
+                  bindChatId(database_, statement.get(), 1, replacementId, error) &&
+                  stepDone(database_, statement.get(), error);
     }
 
     if (success && execute(database_, "COMMIT;", error)) return true;

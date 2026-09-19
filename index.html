@@ -43,17 +43,18 @@
         <section class="question-panel">
           <div class="question-copy">
             <span>ONE AGENT / THREE MEMORIES</span>
-            <h2 id="activeChatName">Чат</h2>
+            <div class="question-title-row">
+              <h2 id="activeChatName">Чат</h2>
+              <span id="taskStateBadge" class="task-state-badge">planning</span>
+            </div>
             <p id="memoryDescription">У каждого чата свой диалог и рабочая память. Долговременные факты общие.</p>
           </div>
-          <div class="mode-control">
-            <span class="field-label">Сохранение памяти</span>
-            <div class="mode-switch" role="group" aria-label="Режим сохранения памяти">
-              <button id="autoModeButton" type="button" aria-pressed="true">Auto</button>
-              <button id="manualModeButton" type="button" aria-pressed="false">Manual</button>
-            </div>
-            <p id="modeDescription">Agent выбирает, что сохранить.</p>
-          </div>
+        </section>
+
+        <section id="chatStateBanner" class="chat-state-banner" data-state="planning" aria-live="polite">
+          <span>Текущее состояние</span>
+          <strong id="chatStateName">PLANNING</strong>
+          <p id="chatStateHint">Опишите задачу — Agent составит план.</p>
         </section>
 
         <p class="chat-notice" id="chatNotice" role="status" hidden></p>

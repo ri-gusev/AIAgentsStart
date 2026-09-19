@@ -65,6 +65,8 @@ public:
     const std::string& personalization() const;
     const std::vector<LongTermMemoryFact>& workingMemoryFacts() const;
     const std::vector<LongTermMemoryFact>& longTermMemoryFacts() const;
+    const ProjectTaskState& taskState() const;
+    const std::string& projectSummary() const;
     bool createChat(const std::string& name, std::string& error);
     bool deleteChat(const std::string& chatId, std::string& error);
     bool selectChat(const std::string& chatId, std::string& error);
@@ -74,6 +76,18 @@ public:
                              const std::string& target, std::string& error);
     bool respondInChat(const std::string& chatId, const std::string& userMessage,
                        std::string& answer, std::string& error);
+    bool handleChatMessage(const std::string& chatId, const std::string& userMessage,
+                           std::string& answer, std::string& error);
+    bool generateTaskPlan(const std::string& taskRequest, std::string& plan,
+                          std::string& error);
+    bool approveTaskPlan(std::string& error);
+    bool reviseTaskPlan(const std::string& feedback, std::string& plan,
+                        std::string& error);
+    bool moveTaskToValidation(std::string& error);
+    bool validateTask(bool& passed, std::string& error);
+    bool returnTaskToExecution(std::string& error);
+    bool pauseTask(std::string& error);
+    bool resumeTask(std::string& error);
 
     bool respond(const std::string& userMessage, std::string& answer, std::string& error);
 
@@ -96,6 +110,8 @@ private:
         std::vector<ChatMessage> transcript;
         std::vector<LongTermMemoryFact> workingFacts;
         std::string summary;
+        std::string projectSummary;
+        ProjectTaskState task;
         std::size_t completedRequests = 0;
         std::size_t nextMessageId = 1;
         bool summaryRetryPending = false;
@@ -112,6 +128,13 @@ private:
     bool containsSecret(const std::string& text) const;
     bool reloadLongTermMemory(std::string& error);
     bool reloadWorkingMemory(const std::string& chatId, std::string& error);
+    bool reloadProjectData(const std::string& chatId, std::string& error);
+    std::string buildTaskPlanConversation(const std::string& taskRequest) const;
+    std::string buildValidationConversation() const;
+    std::string buildProjectPauseConversation() const;
+    bool generateExecutionAnswer(const std::string& changeRequest, std::string& answer,
+                                 std::string& error);
+    bool summarizeProjectOnPause(std::string& summary, std::string& error);
     bool updateAutomaticMemory(const std::string& userMessage,
                                 const std::string& answer, std::string& error);
     bool summarizeHistory(std::string& error);
@@ -129,6 +152,8 @@ private:
                                    std::string& error, bool jsonResponse,
                                    bool summaryRequest = false,
                                    std::string* finishReason = nullptr);
+    void completeAcceptedTurn(const std::string& userMessage, const std::string& answer);
+    void appendAssistantEvent(const std::string& message);
     void remember(const std::string& userMessage, const std::string& answer);
 
     Config config_;
