@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -32,6 +33,9 @@ public:
     struct ChatMessage {
         std::string role;
         std::string content;
+        std::string id;
+        bool workingSaved = false;
+        bool longTermSaved = false;
     };
 
     explicit Agent(const std::string& configPath = "agent_config.local.json");
@@ -54,6 +58,23 @@ public:
     const TokenStatistics& tokenStatistics() const;
     CostStatistics costStatistics() const;
 
+    const std::vector<StoredChat>& chats() const;
+    const std::string& activeChatId() const;
+    const std::string& activeChatName() const;
+    const std::string& memoryMode() const;
+    const std::string& personalization() const;
+    const std::vector<LongTermMemoryFact>& workingMemoryFacts() const;
+    const std::vector<LongTermMemoryFact>& longTermMemoryFacts() const;
+    bool createChat(const std::string& name, std::string& error);
+    bool deleteChat(const std::string& chatId, std::string& error);
+    bool selectChat(const std::string& chatId, std::string& error);
+    bool setMemoryMode(const std::string& mode, std::string& error);
+    bool setPersonalization(const std::string& text, std::string& error);
+    bool saveMessageToMemory(const std::string& chatId, const std::string& messageId,
+                             const std::string& target, std::string& error);
+    bool respondInChat(const std::string& chatId, const std::string& userMessage,
+                       std::string& answer, std::string& error);
+
     bool respond(const std::string& userMessage, std::string& answer, std::string& error);
 
 private:
@@ -70,12 +91,29 @@ private:
         double outputPricePerMillion = 0.0;
     };
 
+    struct ChatState {
+        std::vector<ChatMessage> rawHistory;
+        std::vector<ChatMessage> transcript;
+        std::vector<LongTermMemoryFact> workingFacts;
+        std::string summary;
+        std::size_t completedRequests = 0;
+        std::size_t nextMessageId = 1;
+        bool summaryRetryPending = false;
+    };
+
+    ChatState& activeChat();
+    const ChatState& activeChat() const;
+    void clearRequestStatus();
+    std::string baseInstruction() const;
+    std::string buildWorkingMemoryPrompt() const;
+
     bool loadConfig(const std::string& configPath, std::string& error);
     bool applyInputPolicy(const std::string& userMessage, std::string& error);
     bool containsSecret(const std::string& text) const;
     bool reloadLongTermMemory(std::string& error);
-    bool updateLongTermMemory(const std::string& userMessage,
-                              const std::string& answer, std::string& error);
+    bool reloadWorkingMemory(const std::string& chatId, std::string& error);
+    bool updateAutomaticMemory(const std::string& userMessage,
+                                const std::string& answer, std::string& error);
     bool summarizeHistory(std::string& error);
     bool reviewAnswer(const std::string& userMessage, const std::string& draft,
                       std::string& finalAnswer, std::string& error);
@@ -98,12 +136,13 @@ private:
     ApiClient apiClient_;
     std::unique_ptr<MemoryStore> memoryStore_;
     std::string initializationError_;
-    std::vector<ChatMessage> rawHistory_;
-    std::vector<ChatMessage> sessionTranscript_;
+    std::vector<StoredChat> chats_;
+    std::map<std::string, ChatState> chatStates_;
+    std::string activeChatId_;
+    std::string sessionId_;
+    std::string memoryMode_ = "auto";
+    std::string personalization_;
     std::vector<LongTermMemoryFact> longTermMemory_;
-    std::string conversationSummary_;
-    std::size_t completedRequests_ = 0;
-    bool summaryRetryPending_ = false;
     bool inputRejected_ = false;
     bool inputSuspicious_ = false;
     std::vector<std::string> warnings_;

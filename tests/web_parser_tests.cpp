@@ -29,6 +29,18 @@ int main() {
         for (const char* json : invalid) {
             require(extractJsonStringField(json, "message").empty(), "reject malformed string");
         }
+        std::string value;
+        bool present = false;
+        require(extractJsonStringField(R"({"text":""})", "text", value, &present) &&
+                    present && value.empty(), "explicit empty personalization");
+        require(!extractJsonStringField(R"({"other":"value"})", "text", value, &present) &&
+                    !present, "missing personalization field");
+        require(!extractJsonStringField(R"({"chat_id":null})", "chat_id", value, &present) &&
+                    present, "wrong field type is not omitted");
+        require(extractJsonStringField(R"({"nested":{"chat_id":"wrong"},"chat_id":"2"})",
+                    "chat_id", value, &present) && present && value == "2", "ignore nested ids");
+        require(extractJsonStringField(R"({"chat_\u0069d":"3"})", "chat_id", value) &&
+                    value == "3", "decode escaped field name");
         std::size_t length = 0;
         require(parseContentLength(" 42 \r", length) && length == 42, "content length");
         require(parseContentLength("0", length) && length == 0, "zero content length");

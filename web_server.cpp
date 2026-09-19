@@ -49,14 +49,9 @@ std::string jsonEscape(const std::string& text) {
     return result;
 }
 
-std::string extractJsonStringField(const std::string& json, const std::string& field) {
-    const auto key = json.find("\"" + field + "\"");
-    if (key == std::string::npos) return {};
-    auto start = json.find(':', key + field.size() + 2);
-    if (start == std::string::npos) return {};
-    do { ++start; } while (start < json.size() && std::isspace(static_cast<unsigned char>(json[start])));
-    if (start >= json.size() || json[start++] != '"') return {};
-    std::string result;
+bool readJsonString(const std::string& json, size_t& start, std::string& result) {
+    result.clear();
+    if (start >= json.size() || json[start++] != '"') return false;
     const auto readHex4 = [&json](size_t& position, unsigned& code) {
         if (json.size() - position < 4) return false;
         code = 0;
@@ -89,10 +84,10 @@ std::string extractJsonStringField(const std::string& json, const std::string& f
     };
     while (start < json.size()) {
         const unsigned char c = static_cast<unsigned char>(json[start++]);
-        if (c == '"') return result;
-        if (c < 0x20) return {};
+        if (c == '"') return true;
+        if (c < 0x20) return false;
         if (c != '\\') { result += static_cast<char>(c); continue; }
-        if (start >= json.size()) return {};
+        if (start >= json.size()) return false;
         switch (json[start++]) {
         case '"': result += '"'; break;
         case '\\': result += '\\'; break;
@@ -104,21 +99,54 @@ std::string extractJsonStringField(const std::string& json, const std::string& f
         case 't': result += '\t'; break;
         case 'u': {
             unsigned code = 0;
-            if (!readHex4(start, code)) return {};
+            if (!readHex4(start, code)) return false;
             if (code >= 0xD800 && code <= 0xDBFF) {
-                if (json.size() - start < 6 || json[start] != '\\' || json[start + 1] != 'u') return {};
+                if (json.size() - start < 6 || json[start] != '\\' || json[start + 1] != 'u') return false;
                 start += 2;
                 unsigned low = 0;
-                if (!readHex4(start, low) || low < 0xDC00 || low > 0xDFFF) return {};
+                if (!readHex4(start, low) || low < 0xDC00 || low > 0xDFFF) return false;
                 code = 0x10000 + ((code - 0xD800) << 10) + low - 0xDC00;
-            } else if (code >= 0xDC00 && code <= 0xDFFF) return {};
+            } else if (code >= 0xDC00 && code <= 0xDFFF) return false;
             appendUtf8(code);
             break;
         }
-        default: return {};
+        default: return false;
         }
     }
-    return {};
+    return false;
+}
+
+bool extractJsonStringField(const std::string& json, const std::string& field,
+                            std::string& value, bool* present = nullptr) {
+    value.clear();
+    if (present) *present = false;
+    size_t position = 0;
+    int depth = 0;
+    while (position < json.size()) {
+        const char c = json[position];
+        if (c == '{' || c == '[') { ++depth; ++position; continue; }
+        if (c == '}' || c == ']') { --depth; ++position; continue; }
+        if (c != '"') { ++position; continue; }
+        std::string text;
+        if (!readJsonString(json, position, text)) return false;
+        size_t separator = position;
+        while (separator < json.size() &&
+               std::isspace(static_cast<unsigned char>(json[separator]))) ++separator;
+        if (depth != 1 || text != field || separator >= json.size() ||
+            json[separator] != ':') continue;
+        if (present) *present = true;
+        position = separator + 1;
+        while (position < json.size() &&
+               std::isspace(static_cast<unsigned char>(json[position]))) ++position;
+        return readJsonString(json, position, value);
+    }
+    return false;
+}
+
+[[maybe_unused]] std::string extractJsonStringField(const std::string& json,
+                                                   const std::string& field) {
+    std::string value;
+    return extractJsonStringField(json, field, value) ? value : std::string{};
 }
 
 std::string buildAgentStateFields(const Agent& agent) {
@@ -138,13 +166,40 @@ std::string buildAgentStateFields(const Agent& agent) {
     }
     warningsJson += ']';
 
+    const auto factsJson = [](const std::vector<LongTermMemoryFact>& facts) {
+        std::string result = "[";
+        bool firstFact = true;
+        for (const auto& fact : facts) {
+            if (!firstFact) result += ',';
+            firstFact = false;
+            result += "{\"key\":\"" + jsonEscape(fact.key) +
+                      "\",\"value\":\"" + jsonEscape(fact.value) + "\"}";
+        }
+        return result + ']';
+    };
+
+    std::string chatsJson = "[";
+    first = true;
+    for (const auto& chat : agent.chats()) {
+        if (!first) chatsJson += ',';
+        first = false;
+        chatsJson += "{\"id\":\"" + jsonEscape(chat.id) +
+                     "\",\"name\":\"" + jsonEscape(chat.name) + "\"}";
+    }
+    chatsJson += ']';
+
     std::string conversationJson = "[";
     first = true;
     for (const auto& message : agent.visibleConversation()) {
         if (!first) conversationJson += ',';
         first = false;
-        conversationJson += "{\"role\":\"" + jsonEscape(message.role) +
-                            "\",\"content\":\"" + jsonEscape(message.content) + "\"}";
+        conversationJson += "{\"id\":\"" + jsonEscape(message.id) +
+                            "\",\"role\":\"" + jsonEscape(message.role) +
+                            "\",\"content\":\"" + jsonEscape(message.content) +
+                            "\",\"short_term\":" +
+                            std::string(message.role == "user" ? "true" : "false") +
+                            ",\"working\":" + std::string(message.workingSaved ? "true" : "false") +
+                            ",\"long_term\":" + std::string(message.longTermSaved ? "true" : "false") + "}";
     }
     conversationJson += ']';
 
@@ -152,6 +207,13 @@ std::string buildAgentStateFields(const Agent& agent) {
         "\"input_rejected\":" + std::string(agent.inputRejected() ? "true" : "false") +
         ",\"input_suspicious\":" + std::string(agent.inputSuspicious() ? "true" : "false") +
         ",\"warnings\":" + warningsJson +
+        ",\"chats\":" + chatsJson +
+        ",\"active_chat_id\":\"" + jsonEscape(agent.activeChatId()) + "\"" +
+        ",\"active_chat_name\":\"" + jsonEscape(agent.activeChatName()) + "\"" +
+        ",\"memory_mode\":\"" + jsonEscape(agent.memoryMode()) + "\"" +
+        ",\"personalization\":\"" + jsonEscape(agent.personalization()) + "\"" +
+        ",\"working_memory\":" + factsJson(agent.workingMemoryFacts()) +
+        ",\"long_term_memory\":" + factsJson(agent.longTermMemoryFacts()) +
         ",\"memory\":{\"raw_messages\":" +
         std::to_string(agent.rawHistoryMessageCount()) +
         ",\"raw_message_limit\":" + std::to_string(agent.rawMessageLimit()) +
@@ -160,6 +222,7 @@ std::string buildAgentStateFields(const Agent& agent) {
         ",\"completed_requests\":" + std::to_string(agent.completedRequestCount()) +
         ",\"summary_every_requests\":" + std::to_string(agent.summaryEveryRequests()) +
         ",\"long_term_facts\":" + std::to_string(agent.longTermFactCount()) +
+        ",\"working_facts\":" + std::to_string(agent.workingMemoryFacts().size()) +
         "}" +
         ",\"conversation\":" + conversationJson +
         ",\"usage\":{\"input_tokens\":" + std::to_string(usage.inputTokens) +
@@ -298,10 +361,22 @@ int runWebServer(Agent& agent) {
         if (!readHttpRequest(client, request)) {
             sendHttpResponse(client, 400, "application/json", "{\"error\":\"Invalid request\"}");
         } else if (request.method == "POST" && request.path == "/api/chat") {
-            const std::string prompt = extractJsonStringField(request.body, "message");
+            std::string prompt, chatId;
+            bool chatIdPresent = false;
+            const bool promptValid = extractJsonStringField(request.body, "message", prompt);
+            const bool chatIdValid = extractJsonStringField(request.body, "chat_id", chatId,
+                                                           &chatIdPresent);
             std::string answer, error;
-            if (prompt.empty()) sendHttpResponse(client, 400, "application/json", "{\"error\":\"Message is required\"}");
-            else if (!agent.respond(prompt, answer, error)) {
+            if (!promptValid || prompt.empty()) {
+                sendHttpResponse(client, 400, "application/json",
+                                 "{\"error\":\"Message is required\"," +
+                                     buildAgentStateFields(agent) + "}");
+            } else if (chatIdPresent && (!chatIdValid || chatId.empty())) {
+                sendHttpResponse(client, 400, "application/json",
+                                 "{\"error\":\"A valid chat_id is required\"," +
+                                     buildAgentStateFields(agent) + "}");
+            } else if (!(chatIdPresent ? agent.respondInChat(chatId, prompt, answer, error)
+                                     : agent.respond(prompt, answer, error))) {
                 sendHttpResponse(client, agent.inputRejected() ? 400 : 500, "application/json",
                                  "{\"error\":\"" + jsonEscape(error) + "\"," +
                                      buildAgentStateFields(agent) + "}");
@@ -312,6 +387,54 @@ int runWebServer(Agent& agent) {
                     "\",\"answer\":\"" + jsonEscape(answer) +
                     "\"," + buildAgentStateFields(agent) + "}";
                 sendHttpResponse(client, 200, "application/json", response);
+            }
+        } else if (request.method == "POST" &&
+                   (request.path == "/api/chats" || request.path == "/api/chats/select" ||
+                    request.path == "/api/chats/delete" ||
+                    request.path == "/api/memory-mode" || request.path == "/api/personalization" ||
+                    request.path == "/api/memory/save")) {
+            std::string error;
+            bool success = false;
+            if (request.path == "/api/chats") {
+                std::string name;
+                if (!extractJsonStringField(request.body, "name", name) || name.empty()) {
+                    error = "Chat name is required";
+                } else success = agent.createChat(name, error);
+            } else if (request.path == "/api/chats/select") {
+                std::string chatId;
+                if (!extractJsonStringField(request.body, "chat_id", chatId) || chatId.empty()) {
+                    error = "chat_id is required";
+                } else success = agent.selectChat(chatId, error);
+            } else if (request.path == "/api/chats/delete") {
+                std::string chatId;
+                if (!extractJsonStringField(request.body, "chat_id", chatId) || chatId.empty()) {
+                    error = "chat_id is required";
+                } else success = agent.deleteChat(chatId, error);
+            } else if (request.path == "/api/memory-mode") {
+                std::string mode;
+                if (!extractJsonStringField(request.body, "mode", mode) || mode.empty()) {
+                    error = "Memory mode is required";
+                } else success = agent.setMemoryMode(mode, error);
+            } else if (request.path == "/api/personalization") {
+                std::string text;
+                if (!extractJsonStringField(request.body, "text", text)) {
+                    error = "Personalization text field is required";
+                } else success = agent.setPersonalization(text, error);
+            } else {
+                std::string chatId, messageId, target;
+                if (!extractJsonStringField(request.body, "chat_id", chatId) || chatId.empty() ||
+                    !extractJsonStringField(request.body, "message_id", messageId) || messageId.empty() ||
+                    !extractJsonStringField(request.body, "target", target) || target.empty()) {
+                    error = "chat_id, message_id and target are required";
+                } else success = agent.saveMessageToMemory(chatId, messageId, target, error);
+            }
+            if (success) {
+                sendHttpResponse(client, 200, "application/json", "{" +
+                                     buildAgentStateFields(agent) + "}");
+            } else {
+                sendHttpResponse(client, 400, "application/json", "{\"error\":\"" +
+                                     jsonEscape(error) + "\"," +
+                                     buildAgentStateFields(agent) + "}");
             }
         } else if (request.method == "GET" && request.path == "/api/state") {
             sendHttpResponse(client, 200, "application/json",

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,48 +11,102 @@
     <header class="masthead">
       <div class="brand">
         <span class="brand-mark">AI</span>
-        <div>
-          <p>OPENAI / C++ LAB</p>
-          <h1>Agent chat</h1>
-        </div>
+        <div><p>OPENAI / C++ LAB</p><h1>Agent chat</h1></div>
       </div>
       <div class="status"><i></i> Local backend</div>
     </header>
 
-    <section class="question-panel">
-      <div class="question-copy">
-        <span>ONE AGENT</span>
-        <h2>Ask a question</h2>
-        <p id="memoryDescription">Recent messages, a rolling conversation summary, and important facts from SQLite form one shared context.</p>
-      </div>
-      <aside class="memory-panel" aria-label="Memory and token usage">
-        <dl class="memory-stats" aria-live="polite">
-          <div><dt>Recent context</dt><dd><span id="rawMessages">0</span> / <span id="rawMessageLimit">5</span> messages</dd></div>
-          <div><dt>SQLite facts</dt><dd id="longTermFacts">0</dd></div>
-          <div><dt>Conversation summary</dt><dd><span id="summaryStatus">Empty</span> · <span id="pendingSummaryMessages">0</span> pending</dd></div>
-          <div><dt>Input context</dt><dd><span id="contextTokens">0</span> · <span id="contextCost">$0.000000</span></dd></div>
-          <div><dt>Summary usage</dt><dd><span id="summaryTokens">0</span> · <span id="summaryCost">$0.000000</span></dd></div>
-          <div><dt>All usage</dt><dd><span id="totalTokens">0</span> · <span id="totalCost">$0.000000</span></dd></div>
-        </dl>
+    <div class="workspace-body">
+      <section class="chat-column" aria-label="Чат">
+        <section class="chat-toolbar" aria-label="Управление чатами">
+          <label class="field-label" for="chatSelect">Ваши чаты</label>
+          <div class="chat-select-row">
+            <select id="chatSelect" aria-label="Выбрать чат"></select>
+            <button id="deleteChatButton" class="danger-button" type="button" aria-expanded="false" aria-controls="deleteChatConfirmation">Удалить</button>
+          </div>
+          <form id="newChatForm" class="new-chat-form">
+            <input id="chatNameInput" type="text" maxlength="100" placeholder="Название нового чата" aria-label="Название нового чата" required>
+            <button id="createChatButton" class="secondary-button" type="submit">+ Создать</button>
+          </form>
+          <div id="deleteChatConfirmation" class="delete-chat-confirmation" role="alertdialog" aria-labelledby="deleteChatConfirmationTitle" aria-describedby="deleteChatConfirmationText" hidden>
+            <div>
+              <strong id="deleteChatConfirmationTitle">Удалить чат?</strong>
+              <p id="deleteChatConfirmationText"></p>
+            </div>
+            <div class="delete-chat-actions">
+              <button id="cancelDeleteChatButton" class="secondary-button" type="button">Отмена</button>
+              <button id="confirmDeleteChatButton" class="danger-button danger-button-solid" type="button">Удалить чат</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="question-panel">
+          <div class="question-copy">
+            <span>ONE AGENT / THREE MEMORIES</span>
+            <h2 id="activeChatName">Чат</h2>
+            <p id="memoryDescription">У каждого чата свой диалог и рабочая память. Долговременные факты общие.</p>
+          </div>
+          <div class="mode-control">
+            <span class="field-label">Сохранение памяти</span>
+            <div class="mode-switch" role="group" aria-label="Режим сохранения памяти">
+              <button id="autoModeButton" type="button" aria-pressed="true">Auto</button>
+              <button id="manualModeButton" type="button" aria-pressed="false">Manual</button>
+            </div>
+            <p id="modeDescription">Agent выбирает, что сохранить.</p>
+          </div>
+        </section>
+
+        <p class="chat-notice" id="chatNotice" role="status" hidden></p>
+        <section class="chat-log" id="chatLog" aria-live="polite" aria-label="Сообщения">
+          <div class="chat-empty">Начните диалог с вопроса.</div>
+        </section>
+
+        <section class="composer-panel">
+          <form class="composer" id="chatForm">
+            <textarea id="messageInput" rows="1" maxlength="4000" placeholder="Напишите сообщение…" aria-label="Ваше сообщение" autofocus></textarea>
+            <button id="sendButton" type="submit">
+              <span>Отправить</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+            </button>
+          </form>
+          <p class="hint">Enter — отправить · Shift + Enter — новая строка</p>
+        </section>
+      </section>
+
+      <aside class="sidebar" aria-label="Персонализация и память">
+        <section class="side-card personalization-panel">
+          <h3>Персонализация</h3>
+          <p>Общая для всех чатов. Добавляется к базовой инструкции Agent, не отменяя policies.</p>
+          <form id="personalizationForm">
+            <label class="field-label" for="personalizationInput">Роль, язык и стиль ответа</label>
+            <textarea id="personalizationInput" rows="5" maxlength="2000" placeholder="Например: отвечай по-русски, кратко; объясняй C++ на примерах."></textarea>
+            <button id="savePersonalizationButton" class="secondary-button" type="submit">Сохранить</button>
+          </form>
+        </section>
+
+        <section class="side-card memory-panel" aria-label="Память и стоимость">
+          <h3>Память и токены</h3>
+          <dl class="memory-stats" aria-live="polite">
+            <div><dt>Краткосрочная</dt><dd><span id="rawMessages">0</span> / <span id="rawMessageLimit">5</span> сообщений</dd></div>
+            <div><dt>Рабочие факты чата</dt><dd id="workingFacts">0</dd></div>
+            <div><dt>Общие SQLite-факты</dt><dd id="longTermFacts">0</dd></div>
+            <div><dt>Summary</dt><dd><span id="summaryStatus">Пустой</span> · ожидает <span id="pendingSummaryMessages">0</span></dd></div>
+            <div><dt>Входной контекст</dt><dd><span id="contextTokens">0</span> · <span id="contextCost">$0.000000</span></dd></div>
+            <div><dt>Summary, включён в итог</dt><dd><span id="summaryTokens">0</span> · <span id="summaryCost">$0.000000</span></dd></div>
+            <div><dt>Всего за запуск</dt><dd><span id="totalTokens">0</span> · <span id="totalCost">$0.000000</span></dd></div>
+          </dl>
+        </section>
+
+        <details class="side-card fact-panel">
+          <summary>Рабочая память этого чата</summary>
+          <div id="workingMemoryList" class="fact-list">Пока нет данных.</div>
+        </details>
+        <details class="side-card fact-panel">
+          <summary>Общая долговременная память</summary>
+          <div id="longTermMemoryList" class="fact-list">Пока нет данных.</div>
+        </details>
       </aside>
-    </section>
-
-    <p class="chat-notice" id="chatNotice" role="status" hidden></p>
-
-    <section class="chat-log" id="chatLog" aria-live="polite">
-      <div class="chat-empty">Start the conversation with a question.</div>
-    </section>
-
-    <section class="composer-panel">
-      <form class="composer" id="chatForm">
-        <textarea id="messageInput" rows="1" maxlength="4000" placeholder="For example: What is ESP32?" aria-label="Your question" autofocus></textarea>
-        <button id="sendButton" type="submit">
-          <span>Send</span>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
-        </button>
-      </form>
-      <p class="hint">Enter — send · Shift + Enter — new line</p>
-    </section>
+    </div>
   </main>
   <script src="/app.js"></script>
 </body>
