@@ -13,21 +13,28 @@
         <span class="brand-mark">AI</span>
         <div><p>OPENAI / C++ LAB</p><h1>Agent chat</h1></div>
       </div>
-      <div class="status"><i></i> Local backend</div>
+      <div class="header-actions">
+        <button id="chatSidebarToggle" class="sidebar-toggle" type="button" aria-controls="chatSidebar" aria-expanded="true">Скрыть чаты</button>
+        <div class="status"><i></i> Local backend</div>
+      </div>
     </header>
 
     <div class="workspace-body">
-      <section class="chat-column" aria-label="Чат">
+      <aside id="chatSidebar" class="chat-sidebar" aria-label="Управление чатами">
         <section class="chat-toolbar" aria-label="Управление чатами">
-          <label class="field-label" for="chatSelect">Ваши чаты</label>
+          <div class="chat-sidebar-heading">
+            <span>PROJECTS</span>
+            <h2>Ваши чаты</h2>
+          </div>
+          <label class="field-label" for="chatSelect">Текущий чат</label>
           <div class="chat-select-row">
             <select id="chatSelect" aria-label="Выбрать чат"></select>
-            <button id="deleteChatButton" class="danger-button" type="button" aria-expanded="false" aria-controls="deleteChatConfirmation">Удалить</button>
           </div>
           <form id="newChatForm" class="new-chat-form">
             <input id="chatNameInput" type="text" maxlength="100" placeholder="Название нового чата" aria-label="Название нового чата" required>
             <button id="createChatButton" class="secondary-button" type="submit">+ Создать</button>
           </form>
+          <button id="deleteChatButton" class="danger-button chat-delete-button" type="button" aria-expanded="false" aria-controls="deleteChatConfirmation">Удалить текущий чат</button>
           <div id="deleteChatConfirmation" class="delete-chat-confirmation" role="alertdialog" aria-labelledby="deleteChatConfirmationTitle" aria-describedby="deleteChatConfirmationText" hidden>
             <div>
               <strong id="deleteChatConfirmationTitle">Удалить чат?</strong>
@@ -39,7 +46,9 @@
             </div>
           </div>
         </section>
+      </aside>
 
+      <section class="chat-column" aria-label="Чат">
         <section class="question-panel">
           <div class="question-copy">
             <span>ONE AGENT / THREE MEMORIES</span>

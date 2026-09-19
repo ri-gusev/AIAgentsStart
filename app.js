@@ -35,6 +35,8 @@ const taskStateBadge = document.querySelector('#taskStateBadge');
 const chatStateBanner = document.querySelector('#chatStateBanner');
 const chatStateName = document.querySelector('#chatStateName');
 const chatStateHint = document.querySelector('#chatStateHint');
+const workspace = document.querySelector('.workspace');
+const chatSidebarToggle = document.querySelector('#chatSidebarToggle');
 
 let requestPending = false;
 let activeChatId = '';
@@ -82,6 +84,12 @@ function updateControlState() {
 function formatTokenCount(value) { return Number(value || 0).toLocaleString(); }
 function formatUsd(value) { return '$' + Number(value || 0).toFixed(6); }
 function scrollToLatest() { chatLog.scrollTop = chatLog.scrollHeight; }
+
+function setChatSidebarCollapsed(collapsed) {
+  workspace.classList.toggle('chats-collapsed', collapsed);
+  chatSidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+  chatSidebarToggle.textContent = collapsed ? 'Показать чаты' : 'Скрыть чаты';
+}
 
 function addMessage(role, text = '', scroll = true) {
   chatLog.querySelector('.chat-empty')?.remove();
@@ -443,6 +451,9 @@ personalizationForm.addEventListener('submit', (event) => {
   personalizationInput.value = serverPersonalization;
   personalizationDirty = false;
   mutateState('/api/personalization', { text }, 'Не удалось сохранить персонализацию.', { forcePersonalization: true });
+});
+chatSidebarToggle.addEventListener('click', () => {
+  setChatSidebarCollapsed(!workspace.classList.contains('chats-collapsed'));
 });
 
 loadAgentState();
