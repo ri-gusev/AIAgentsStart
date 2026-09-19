@@ -922,6 +922,7 @@ void testTaskStateMachineAndPausePersistence() {
         require(calls.size() == failedValidationCall + 1 && calls.back().json,
                 "Validation used the wrong number or format of LLM calls");
         contains(calls.back().messages, "PLAN_V1");
+        contains(calls.back().messages, "Never ask the user to compile a file");
 
         enqueue("REWORKED_AFTER_FAILED_VALIDATION");
         enqueue("{\"accepted\":true}");
@@ -930,13 +931,20 @@ void testTaskStateMachineAndPausePersistence() {
                 agent.visibleConversation().back().content.find("Состояние: execution") != std::string::npos &&
                 agent.visibleConversation().back().content.find("REWORKED_AFTER_FAILED_VALIDATION") != std::string::npos,
                 "Failed validation could not be explicitly returned to execution");
-        require(agent.moveTaskToValidation(error), "Could not re-enter validation");
+        require(agent.moveTaskToValidation(error) &&
+                agent.taskState().validationReport == "Unit test failed; fix execution",
+                "Re-entering validation discarded the feedback used by execution");
         enqueue("{\"passed\":true,\"report\":\"All planned checks passed\"}");
         passed = false;
+        const auto repeatedValidationCall = calls.size();
         require(agent.validateTask(passed, error) && passed && agent.taskState().state == "DONE" &&
                 observer.loadTaskState(chatId, stored, error) && stored.state == "DONE" &&
                 stored.validationReport == "All planned checks passed",
                 "Successful validation did not persist DONE");
+        require(calls.size() == repeatedValidationCall + 1 &&
+                calls.back().messages.find("Unit test failed; fix execution") != std::string::npos &&
+                calls.back().messages.find("REWORKED_AFTER_FAILED_VALIDATION") != std::string::npos,
+                "Repeated validation was not linked to its feedback and revised execution result");
         require(agent.visibleConversation().back().content.find("Состояние: DONE") != std::string::npos &&
                 agent.visibleConversation().back().content.find("All planned checks passed") != std::string::npos,
                 "Successful validation did not create a visible DONE report");

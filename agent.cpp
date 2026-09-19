@@ -647,7 +647,9 @@ bool Agent::moveTaskToValidation(std::string& error) {
     }
     auto next = current;
     next.state = "validation";
-    next.validationReport.clear();
+    // Keep the previous failed report until the new validation finishes. It
+    // connects the reworked execution result with the exact corrections that
+    // triggered the rework. validateTask() replaces it with the new report.
     if (!memoryStore_->saveTaskState(activeChatId_, next, error)) {
         error = "Could not save validation state"; return false;
     }
@@ -1037,8 +1039,10 @@ std::string Agent::buildTaskPlanConversation(const std::string& taskRequest) con
     appendContext(messages, first);
     appendMessage(messages, first, "system", "You are in PLANNING. Create an internal technical "
         "specification and an actionable plan for the task. Include: objective, requirements, "
-        "constraints, ordered implementation steps, and concrete validation checks. Do not claim "
-        "that implementation or tests have already been completed. Return only the plan as plain text.");
+        "constraints, ordered implementation steps, and concrete validation checks. Validation is "
+        "a review of the produced result, not a build stage: do not make compilation, running a "
+        "binary, or external tool execution a default validation requirement. Do not claim that "
+        "implementation or tests have already been completed. Return only the plan as plain text.");
     appendMessage(messages, first, "user", taskRequest);
     return messages + "]";
 }
@@ -1047,12 +1051,17 @@ std::string Agent::buildValidationConversation() const {
     std::string messages = "[";
     bool first = true;
     appendContext(messages, first);
-    appendMessage(messages, first, "system", "You are in VALIDATION. Compare the completed work "
-        "described in the current project context against the approved plan and its validation "
-        "checks. Do not invent test results. Pass only when the available evidence demonstrates "
-        "that all required checks succeeded. Return ONLY JSON: "
-        "{\"passed\":true,\"report\":\"concise evidence and checks\"} or "
-        "{\"passed\":false,\"report\":\"failures and exact corrections for execution\"}.");
+    appendMessage(messages, first, "system", "You are in VALIDATION. Review the latest execution "
+        "result against the user's task, the approved plan, and any previous validation report. "
+        "This stage performs a static, reasoned review of the result already present in the "
+        "conversation. It is NOT a compilation, build, runtime, or external-tool stage. Never ask "
+        "the user to compile a file, never require compilation as a condition for passing, and do "
+        "not fail solely because a compiler or runtime test was not run. Do not invent test results. "
+        "If the latest execution still has substantive defects, fail and give concrete, actionable "
+        "corrections for the next EXECUTION step. If it addresses the requirements and no defect is "
+        "visible from the available content, pass it. Return ONLY JSON: "
+        "{\"passed\":true,\"report\":\"concise review of why the result is acceptable\"} or "
+        "{\"passed\":false,\"report\":\"exact corrections that execution must apply\"}.");
     return messages + "]";
 }
 
