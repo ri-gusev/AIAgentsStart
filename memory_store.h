@@ -16,10 +16,18 @@ struct StoredChat {
 };
 
 struct ProjectTaskState {
-    std::string state = "planning";
+    std::string state = "PLANNING";
+    std::string resumeState;
     std::string plan;
     std::string validationReport;
-    bool paused = false;
+    bool executionCompleted = false;
+};
+
+struct TaskTransitionLog {
+    std::string previousState;
+    std::string action;
+    std::string newState;
+    std::string timestamp;
 };
 
 class MemoryStore {
@@ -41,12 +49,14 @@ public:
                     std::string& error);
     bool loadProjectSummary(const std::string& chatId, std::string& summary,
                             std::string& error) const;
-    bool saveProjectPause(const std::string& chatId, const std::string& summary,
-                          const ProjectTaskState& taskState, std::string& error);
     bool loadTaskState(const std::string& chatId, ProjectTaskState& taskState,
                        std::string& error) const;
-    bool saveTaskState(const std::string& chatId, const ProjectTaskState& taskState,
-                       std::string& error);
+    bool commitTaskTransition(const std::string& chatId, const std::string& expectedState,
+                              const std::string& action, const ProjectTaskState& nextState,
+                              const std::string* pauseSummary, std::string& error);
+    bool loadTaskTransitionLog(const std::string& chatId,
+                               std::vector<TaskTransitionLog>& transitions,
+                               std::string& error) const;
     bool loadWorking(const std::string& chatId, std::vector<LongTermMemoryFact>& facts,
                      std::string& error) const;
     bool upsertWorking(const std::string& chatId, const LongTermMemoryFact& fact,

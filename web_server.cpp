@@ -177,6 +177,18 @@ std::string buildAgentStateFields(const Agent& agent) {
         }
         return result + ']';
     };
+    const auto invariantsJson = [](const std::vector<ProjectInvariant>& invariants) {
+        std::string result = "[";
+        bool firstInvariant = true;
+        for (const auto& invariant : invariants) {
+            if (!firstInvariant) result += ',';
+            firstInvariant = false;
+            result += "{\"key\":\"" + jsonEscape(invariant.key) +
+                      "\",\"value\":\"" + jsonEscape(invariant.value) +
+                      "\",\"description\":\"" + jsonEscape(invariant.description) + "\"}";
+        }
+        return result + ']';
+    };
 
     std::string chatsJson = "[";
     first = true;
@@ -212,10 +224,13 @@ std::string buildAgentStateFields(const Agent& agent) {
         ",\"active_chat_name\":\"" + jsonEscape(agent.activeChatName()) + "\"" +
         ",\"personalization\":\"" + jsonEscape(agent.personalization()) + "\"" +
         ",\"task_state\":{\"state\":\"" + jsonEscape(agent.taskState().state) +
+        "\",\"resume_state\":\"" + jsonEscape(agent.taskState().resumeState) +
         "\",\"plan\":\"" + jsonEscape(agent.taskState().plan) +
         "\",\"validation_report\":\"" + jsonEscape(agent.taskState().validationReport) +
-        "\",\"paused\":" + std::string(agent.taskState().paused ? "true" : "false") + "}" +
+        "\",\"execution_completed\":" + std::string(agent.taskState().executionCompleted ? "true" : "false") +
+        ",\"paused\":" + std::string(agent.taskState().state == "PAUSED" ? "true" : "false") + "}" +
         ",\"project_summary\":\"" + jsonEscape(agent.projectSummary()) + "\"" +
+        ",\"project_invariants\":" + invariantsJson(agent.projectInvariants()) +
         ",\"working_memory\":" + factsJson(agent.workingMemoryFacts()) +
         ",\"long_term_memory\":" + factsJson(agent.longTermMemoryFacts()) +
         ",\"memory\":{\"raw_messages\":" +
@@ -227,6 +242,7 @@ std::string buildAgentStateFields(const Agent& agent) {
         ",\"summary_every_requests\":" + std::to_string(agent.summaryEveryRequests()) +
         ",\"long_term_facts\":" + std::to_string(agent.longTermFactCount()) +
         ",\"working_facts\":" + std::to_string(agent.workingMemoryFacts().size()) +
+        ",\"invariant_facts\":" + std::to_string(agent.projectInvariants().size()) +
         "}" +
         ",\"conversation\":" + conversationJson +
         ",\"usage\":{\"input_tokens\":" + std::to_string(usage.inputTokens) +
@@ -396,6 +412,9 @@ int runWebServer(Agent& agent) {
                    (request.path == "/api/chats" || request.path == "/api/chats/select" ||
                     request.path == "/api/chats/delete" ||
                     request.path == "/api/personalization" || request.path == "/api/task/plan" ||
+                    request.path == "/api/invariants" || request.path == "/api/invariants/update" ||
+                    request.path == "/api/invariants/delete" ||
+                    request.path == "/api/task/transition" ||
                     request.path == "/api/task/revise" || request.path == "/api/task/approve" ||
                     request.path == "/api/task/validation" || request.path == "/api/task/validate" ||
                     request.path == "/api/task/execution" ||
@@ -422,12 +441,43 @@ int runWebServer(Agent& agent) {
                 if (!extractJsonStringField(request.body, "text", text)) {
                     error = "Personalization text field is required";
                 } else success = agent.setPersonalization(text, error);
+            } else if (request.path == "/api/invariants" ||
+                       request.path == "/api/invariants/update" ||
+                       request.path == "/api/invariants/delete") {
+                std::string projectId, key;
+                if (!extractJsonStringField(request.body, "project_id", projectId) || projectId.empty() ||
+                    !extractJsonStringField(request.body, "key", key) || key.empty()) {
+                    error = "project_id and key are required";
+                } else if (request.path == "/api/invariants/delete") {
+                    success = agent.deleteInvariant(projectId, key, error);
+                } else {
+                    ProjectInvariant invariant;
+                    invariant.key = key;
+                    if (!extractJsonStringField(request.body, "value", invariant.value) ||
+                        !extractJsonStringField(request.body, "description", invariant.description)) {
+                        error = "value and description are required";
+                    } else if (request.path == "/api/invariants") {
+                        success = agent.createInvariant(projectId, invariant, error);
+                    } else {
+                        std::string currentKey;
+                        if (!extractJsonStringField(request.body, "current_key", currentKey) || currentKey.empty()) {
+                            error = "current_key is required";
+                        } else success = agent.updateInvariant(projectId, currentKey, invariant, error);
+                    }
+                }
             } else {
                 std::string chatId;
                 if (!extractJsonStringField(request.body, "chat_id", chatId) || chatId.empty()) {
                     error = "chat_id is required";
                 } else if (!agent.selectChat(chatId, error)) {
                     success = false;
+                } else if (request.path == "/api/task/transition") {
+                    std::string action;
+                    if (!extractJsonStringField(request.body, "action", action) || action.empty()) {
+                        error = "action is required";
+                    } else {
+                        success = agent.performTaskAction(action, error);
+                    }
                 } else if (request.path == "/api/task/plan") {
                     std::string taskRequest, plan;
                     if (!extractJsonStringField(request.body, "task_request", taskRequest) ||
@@ -447,10 +497,6 @@ int runWebServer(Agent& agent) {
                     success = agent.approveTaskPlan(error);
                 } else if (request.path == "/api/task/validation") {
                     success = agent.moveTaskToValidation(error);
-                    if (success) {
-                        bool passed = false;
-                        success = agent.validateTask(passed, error);
-                    }
                 } else if (request.path == "/api/task/validate") {
                     bool passed = false;
                     success = agent.validateTask(passed, error);

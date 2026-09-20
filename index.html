@@ -54,16 +54,38 @@
             <span>ONE AGENT / THREE MEMORIES</span>
             <div class="question-title-row">
               <h2 id="activeChatName">Чат</h2>
-              <span id="taskStateBadge" class="task-state-badge">planning</span>
             </div>
             <p id="memoryDescription">У каждого чата свой диалог и рабочая память. Долговременные факты общие.</p>
           </div>
         </section>
 
-        <section id="chatStateBanner" class="chat-state-banner" data-state="planning" aria-live="polite">
-          <span>Текущее состояние</span>
-          <strong id="chatStateName">PLANNING</strong>
-          <p id="chatStateHint">Опишите задачу — Agent составит план.</p>
+        <section id="taskStatePanel" class="task-state-panel" aria-labelledby="taskStateTitle">
+          <div class="task-state-header">
+            <div>
+              <span class="task-state-eyebrow">WORKFLOW</span>
+              <h3 id="taskStateTitle">Task State</h3>
+            </div>
+            <span id="taskStateBadge" class="task-state-badge" aria-live="polite">PLANNING</span>
+          </div>
+          <ol id="taskStateSteps" class="task-stepper" aria-label="Этапы выполнения задачи">
+            <li class="task-state-step is-current" data-task-state="PLANNING" aria-current="step">
+              <span class="task-step-marker" aria-hidden="true">1</span>
+              <span class="task-step-label">Planning</span>
+            </li>
+            <li class="task-state-step is-future" data-task-state="EXECUTION">
+              <span class="task-step-marker" aria-hidden="true">2</span>
+              <span class="task-step-label">Execution</span>
+            </li>
+            <li class="task-state-step is-future" data-task-state="VALIDATION">
+              <span class="task-step-marker" aria-hidden="true">3</span>
+              <span class="task-step-label">Validation</span>
+            </li>
+            <li class="task-state-step is-future" data-task-state="DONE">
+              <span class="task-step-marker" aria-hidden="true">4</span>
+              <span class="task-step-label">Done</span>
+            </li>
+          </ol>
+          <div id="taskStateActions" class="task-state-actions" aria-label="Доступные действия задачи"></div>
         </section>
 
         <p class="chat-notice" id="chatNotice" role="status" hidden></p>
@@ -104,9 +126,22 @@
             <div><dt>Входной контекст</dt><dd><span id="contextTokens">0</span> · <span id="contextCost">$0.000000</span></dd></div>
             <div><dt>Summary, включён в итог</dt><dd><span id="summaryTokens">0</span> · <span id="summaryCost">$0.000000</span></dd></div>
             <div><dt>Всего за запуск</dt><dd><span id="totalTokens">0</span> · <span id="totalCost">$0.000000</span></dd></div>
+            <div><dt>Project invariants</dt><dd id="invariantFacts">0</dd></div>
           </dl>
         </section>
 
+        <details class="side-card invariant-panel" open>
+          <summary>Project invariants</summary>
+          <p>Write one restriction at a time. It has priority over working memory and dialogue history.</p>
+          <div id="invariantList" class="invariant-list">No invariants yet.</div>
+          <form id="invariantForm" class="invariant-form">
+            <textarea id="invariantText" rows="3" maxlength="2000" placeholder="Например: все API-вызовы выполняются только на C++, ключи не передаются в браузер." required></textarea>
+            <div class="invariant-actions">
+              <button id="saveInvariantButton" class="secondary-button" type="submit">Add invariant</button>
+              <button id="cancelInvariantEditButton" class="secondary-button" type="button" hidden>Cancel</button>
+            </div>
+          </form>
+        </details>
         <details class="side-card fact-panel">
           <summary>Рабочая память этого чата</summary>
           <div id="workingMemoryList" class="fact-list">Пока нет данных.</div>

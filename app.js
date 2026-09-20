@@ -21,8 +21,14 @@ const rawMessages = document.querySelector('#rawMessages');
 const rawMessageLimit = document.querySelector('#rawMessageLimit');
 const workingFacts = document.querySelector('#workingFacts');
 const longTermFacts = document.querySelector('#longTermFacts');
+const invariantFacts = document.querySelector('#invariantFacts');
 const workingMemoryList = document.querySelector('#workingMemoryList');
 const longTermMemoryList = document.querySelector('#longTermMemoryList');
+const invariantList = document.querySelector('#invariantList');
+const invariantForm = document.querySelector('#invariantForm');
+const invariantText = document.querySelector('#invariantText');
+const saveInvariantButton = document.querySelector('#saveInvariantButton');
+const cancelInvariantEditButton = document.querySelector('#cancelInvariantEditButton');
 const summaryStatus = document.querySelector('#summaryStatus');
 const pendingSummaryMessages = document.querySelector('#pendingSummaryMessages');
 const contextTokens = document.querySelector('#contextTokens');
@@ -31,20 +37,75 @@ const summaryTokens = document.querySelector('#summaryTokens');
 const summaryCost = document.querySelector('#summaryCost');
 const totalTokens = document.querySelector('#totalTokens');
 const totalCost = document.querySelector('#totalCost');
+const taskStatePanel = document.querySelector('#taskStatePanel');
 const taskStateBadge = document.querySelector('#taskStateBadge');
-const chatStateBanner = document.querySelector('#chatStateBanner');
-const chatStateName = document.querySelector('#chatStateName');
-const chatStateHint = document.querySelector('#chatStateHint');
+const taskStateSteps = Array.from(document.querySelectorAll('.task-state-step'));
+const taskStateActions = document.querySelector('#taskStateActions');
 const workspace = document.querySelector('.workspace');
 const chatSidebarToggle = document.querySelector('#chatSidebarToggle');
+
+const TASK_PHASES = ['PLANNING', 'EXECUTION', 'VALIDATION', 'DONE'];
+const TASK_STATES = [...TASK_PHASES, 'PAUSED'];
+const TASK_TRANSITION_ENDPOINT = '/api/task/transition';
 
 let requestPending = false;
 let activeChatId = '';
 let personalizationDirty = false;
 let serverPersonalization = '';
 let pendingDeleteChatId = '';
-let currentTask = { state: 'planning', plan: '', validation_report: '', paused: false };
-let currentProjectSummary = '';
+let currentTask = {
+  state: 'PLANNING', resume_state: 'PLANNING', plan: '',
+  validation_report: '', execution_completed: false
+};
+let editingInvariantKey = '';
+
+function resetInvariantForm() {
+  editingInvariantKey = '';
+  invariantForm.reset();
+  saveInvariantButton.textContent = 'Add invariant';
+  cancelInvariantEditButton.hidden = true;
+}
+
+function editInvariant(invariant) {
+  editingInvariantKey = invariant.key;
+  invariantText.value = invariant.value;
+  saveInvariantButton.textContent = 'Save changes';
+  cancelInvariantEditButton.hidden = false;
+  invariantText.focus();
+}
+
+function renderInvariants(invariants) {
+  invariantList.replaceChildren();
+  if (!Array.isArray(invariants) || !invariants.length) {
+    invariantList.textContent = 'No invariants yet.';
+    return;
+  }
+  invariants.forEach((invariant) => {
+    if (!invariant || typeof invariant.key !== 'string') return;
+    const item = document.createElement('article');
+    item.className = 'invariant-item';
+    const value = document.createElement('p');
+    value.textContent = typeof invariant.value === 'string' ? invariant.value : '';
+    const actions = document.createElement('div');
+    actions.className = 'invariant-item-actions';
+    const edit = document.createElement('button');
+    edit.type = 'button'; edit.className = 'secondary-button'; edit.textContent = 'Edit';
+    edit.disabled = requestPending;
+    edit.addEventListener('click', () => editInvariant(invariant));
+    const remove = document.createElement('button');
+    remove.type = 'button'; remove.className = 'danger-button'; remove.textContent = 'Delete';
+    remove.disabled = requestPending;
+    remove.addEventListener('click', () => {
+      if (!requestPending && activeChatId && window.confirm('Delete invariant "' + invariant.key + '"?')) {
+        mutateState('/api/invariants/delete', { project_id: activeChatId, key: invariant.key },
+                    'Could not delete invariant.');
+      }
+    });
+    actions.append(edit, remove);
+    item.append(value, actions);
+    invariantList.append(item);
+  });
+}
 
 function closeDeleteConfirmation(restoreFocus = false) {
   pendingDeleteChatId = '';
@@ -65,7 +126,7 @@ function openDeleteConfirmation() {
 
 function updateControlState() {
   const busy = requestPending;
-  const taskLocked = currentTask.paused || currentTask.state === 'DONE';
+  const taskLocked = currentTask.state === 'PAUSED' || currentTask.state === 'DONE';
   sendButton.disabled = busy || !activeChatId || taskLocked;
   input.disabled = busy || taskLocked;
   chatSelect.disabled = busy;
@@ -76,8 +137,13 @@ function updateControlState() {
   confirmDeleteChatButton.disabled = busy || !pendingDeleteChatId;
   personalizationInput.disabled = busy;
   savePersonalizationButton.disabled = busy;
-  chatLog.querySelectorAll('.message-task-action').forEach((button) => {
-    button.disabled = busy || !activeChatId;
+  invariantText.disabled = busy;
+  saveInvariantButton.disabled = busy || !activeChatId;
+  cancelInvariantEditButton.disabled = busy;
+  invariantList.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
+  taskStateActions.querySelectorAll('.task-state-action').forEach((button) => {
+    const needsPlan = button.dataset.requiresPlan === 'true';
+    button.disabled = busy || !activeChatId || (needsPlan && !currentTask.plan);
   });
 }
 
@@ -113,69 +179,53 @@ function addMessage(role, text = '', scroll = true) {
   return message;
 }
 
-function taskAction(label, endpoint, errorText, extraPayload = {}) {
+function taskAction(label, action, errorText, { variant = '', requiresPlan = false } = {}) {
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = 'message-task-action';
+  button.className = 'task-state-action' + (variant ? ' ' + variant : '');
   button.textContent = label;
-  button.disabled = requestPending || !activeChatId;
-  button.addEventListener('click', () => {
-    mutateState(endpoint, { chat_id: activeChatId, ...extraPayload }, errorText,
-                { keepPosition: false });
+  button.dataset.requiresPlan = String(requiresPlan);
+  button.disabled = requestPending || !activeChatId || (requiresPlan && !currentTask.plan);
+  if (requiresPlan && !currentTask.plan) {
+    button.title = 'Сначала отправьте задачу, чтобы Agent сформировал план.';
+  }
+  button.addEventListener('click', async () => {
+    const accepted = await mutateState(
+      TASK_TRANSITION_ENDPOINT, { chat_id: activeChatId, action }, errorText,
+      { keepPosition: false }
+    );
+    if (accepted && action === 'CREATE_TASK') input.focus();
   });
   return button;
 }
 
-function renderInlineTaskControls() {
-  const lastAssistant = [...chatLog.querySelectorAll('.chat-message.assistant')].at(-1);
-  if (!lastAssistant) return;
-
-  const controls = document.createElement('div');
-  controls.className = 'message-task-controls';
-  const status = document.createElement('span');
-  status.className = 'message-task-status';
-  status.textContent = currentTask.paused ? currentTask.state + ' · PAUSE' : currentTask.state;
-  controls.append(status);
-
-  if (currentTask.paused) {
-    controls.append(taskAction('Продолжить', '/api/task/resume', 'Не удалось продолжить задачу.'));
-  } else if (currentTask.state === 'planning' && currentTask.plan) {
-    controls.append(
-      taskAction('Утвердить план', '/api/task/approve', 'Не удалось утвердить план.'),
-      taskAction('Переделать план', '/api/task/revise', 'Не удалось переделать план.', { feedback: '' })
+function renderTaskActions() {
+  taskStateActions.replaceChildren();
+  if (currentTask.state === 'PLANNING') {
+    taskStateActions.append(
+      taskAction('Approve Plan / Начать выполнение', 'APPROVE_PLAN',
+                 'Не удалось утвердить план.', { variant: 'primary', requiresPlan: true }),
+      taskAction('Regenerate Plan / Переделать план', 'REGENERATE_PLAN',
+                 'Не удалось переделать план.', { requiresPlan: true }),
+      taskAction('Пауза', 'PAUSE', 'Не удалось поставить задачу на паузу.',
+                 { variant: 'pause' })
     );
-  } else if (currentTask.state === 'execution') {
-    controls.append(
-      taskAction('Проверить', '/api/task/validation', 'Не удалось перейти к проверке.'),
-      taskAction('Пауза', '/api/task/pause', 'Не удалось поставить задачу на паузу.')
+  } else if (currentTask.state === 'EXECUTION') {
+    taskStateActions.append(
+      taskAction('Пауза', 'PAUSE', 'Не удалось поставить задачу на паузу.',
+                 { variant: 'pause' })
     );
-  } else if (currentTask.state === 'validation') {
-    if (currentTask.validation_report) {
-      controls.append(
-        taskAction('Вернуться к execution', '/api/task/execution', 'Не удалось вернуться к выполнению.'),
-        taskAction('Повторить проверку', '/api/task/validate', 'Не удалось повторить проверку.')
-      );
-    } else {
-      controls.append(
-        taskAction('Завершить проверку', '/api/task/validate', 'Не удалось выполнить проверку.'),
-        taskAction('Пауза', '/api/task/pause', 'Не удалось поставить задачу на паузу.')
-      );
-    }
   } else if (currentTask.state === 'DONE') {
-    status.textContent = 'DONE · задача завершена';
+    taskStateActions.append(
+      taskAction('New Task / Новая задача', 'CREATE_TASK',
+                 'Не удалось создать новую задачу.', { variant: 'primary' })
+    );
+  } else if (currentTask.state === 'PAUSED') {
+    taskStateActions.append(
+      taskAction('Resume / Продолжить', 'RESUME',
+                 'Не удалось продолжить задачу.', { variant: 'primary' })
+    );
   }
-
-  if (currentTask.validation_report || currentProjectSummary) {
-    const details = document.createElement('details');
-    details.className = 'message-task-details';
-    const summary = document.createElement('summary');
-    summary.textContent = currentProjectSummary ? 'Контекст задачи' : 'Результат проверки';
-    const text = document.createElement('div');
-    text.textContent = currentProjectSummary || currentTask.validation_report;
-    details.append(summary, text);
-    controls.append(details);
-  }
-  lastAssistant.append(controls);
 }
 
 function renderConversation(messages = [], keepPosition = false) {
@@ -187,13 +237,14 @@ function renderConversation(messages = [], keepPosition = false) {
     } else {
       const empty = document.createElement('div');
       empty.className = 'chat-empty';
-      empty.textContent = 'Опишите задачу. Первое сообщение станет этапом planning.';
+      empty.textContent = 'Опишите задачу. Первое сообщение станет этапом PLANNING.';
       chatLog.append(empty);
     }
   } else {
-    messages.forEach((message) => addMessage(message.role, message.content, false));
+    messages.forEach((item) => {
+      addMessage(item.role, item.content, false);
+    });
   }
-  renderInlineTaskControls();
   if (keepPosition) chatLog.scrollTop = previousTop;
   else scrollToLatest();
 }
@@ -232,38 +283,68 @@ function showNotice(text) {
   chatNotice.hidden = !text;
 }
 
+function normalizeTaskState(value, fallback = 'PLANNING') {
+  const normalized = typeof value === 'string' ? value.trim().toUpperCase() : '';
+  return TASK_STATES.includes(normalized) ? normalized : fallback;
+}
+
+function renderTaskSteps() {
+  const displayedState = currentTask.state === 'PAUSED'
+    ? currentTask.resume_state : currentTask.state;
+  const currentIndex = Math.max(0, TASK_PHASES.indexOf(displayedState));
+  taskStateSteps.forEach((step, index) => {
+    const stepState = step.dataset.taskState;
+    const isCurrent = stepState === displayedState;
+    const isCompleted = index < currentIndex ||
+      (currentTask.state === 'DONE' && stepState === 'DONE');
+    step.classList.toggle('is-current', isCurrent);
+    step.classList.toggle('is-completed', isCompleted);
+    step.classList.toggle('is-future', index > currentIndex);
+    step.classList.toggle('is-paused', currentTask.state === 'PAUSED' && isCurrent);
+    if (isCurrent) step.setAttribute('aria-current', 'step');
+    else step.removeAttribute('aria-current');
+    const marker = step.querySelector('.task-step-marker');
+    if (marker) marker.textContent = isCompleted ? '✓' : String(index + 1);
+  });
+}
+
 function renderTaskState(data) {
-  const allowedStates = ['planning', 'execution', 'validation', 'DONE'];
   const received = data?.task_state || {};
-  const state = allowedStates.includes(received.state) ? received.state : 'planning';
+  const storedState = normalizeTaskState(received.state);
+  const legacyPaused = received.paused === true;
+  const state = storedState === 'PAUSED' || legacyPaused ? 'PAUSED' : storedState;
+  let resumeState = normalizeTaskState(
+    received.resume_state ?? received.paused_from_state ?? received.previous_state ??
+      (storedState === 'PAUSED' ? 'PLANNING' : storedState)
+  );
+  if (resumeState === 'PAUSED') resumeState = 'PLANNING';
   currentTask = {
     state,
+    resume_state: resumeState,
     plan: typeof received.plan === 'string' ? received.plan : '',
     validation_report: typeof received.validation_report === 'string' ? received.validation_report : '',
-    paused: received.paused === true
+    execution_completed: received.execution_completed === true
   };
-  taskStateBadge.textContent = currentTask.paused ? state + ' · PAUSE' : state;
-  taskStateBadge.classList.toggle('paused', currentTask.paused);
-  chatStateBanner.dataset.state = currentTask.paused ? 'paused' : state;
-  chatStateName.textContent = currentTask.paused ? state.toUpperCase() + ' · PAUSE' : state.toUpperCase();
-  const stateHints = {
-    planning: currentTask.plan ? 'Утвердите план или отправьте замечания для новой версии.' : 'Опишите задачу — Agent составит план.',
-    execution: 'Agent выполняет задачу. После получения результата нажмите «Проверить».',
-    validation: currentTask.validation_report ? 'Проверка не пройдена. Верните задачу в execution для исправлений.' : 'Результат проверяется относительно утверждённого плана.',
-    DONE: 'Проверка пройдена, задача завершена.'
-  };
-  chatStateHint.textContent = currentTask.paused ? 'Проект на паузе; состояние и summary сохранены.' : stateHints[state];
-  currentProjectSummary = typeof data.project_summary === 'string' ? data.project_summary : '';
-  input.placeholder = state === 'planning'
+  taskStateBadge.textContent = state === 'PAUSED' ? 'PAUSED · ' + resumeState : state;
+  taskStateBadge.classList.toggle('paused', state === 'PAUSED');
+  taskStatePanel.classList.toggle('paused', state === 'PAUSED');
+  taskStatePanel.classList.toggle('done', state === 'DONE');
+  renderTaskSteps();
+  renderTaskActions();
+  const inputState = state === 'PAUSED' ? resumeState : state;
+  input.placeholder = state === 'PAUSED' ? 'Задача на паузе'
+    : inputState === 'PLANNING'
     ? currentTask.plan ? 'Напишите, что изменить в плане…' : 'Опишите новую задачу…'
-    : state === 'execution' ? 'Продолжите работу над задачей…'
-      : state === 'validation' ? 'Добавьте данные перед проверкой…'
+    : inputState === 'EXECUTION' ? 'Добавьте уточнение к выполняемой задаче…'
+      : inputState === 'VALIDATION' ? 'Добавьте уточнение к проверяемой задаче…'
         : 'Задача завершена';
 }
 
 function renderAgentState(data, { renderChat = true, keepPosition = false, forcePersonalization = false } = {}) {
   if (!data || !data.memory) return false;
+  const previousActiveChatId = activeChatId;
   activeChatId = String(data.active_chat_id || '');
+  if (previousActiveChatId && previousActiveChatId !== activeChatId) resetInvariantForm();
   activeChatName.textContent = String(data.active_chat_name || 'Чат');
   chatSelect.replaceChildren();
   if (Array.isArray(data.chats)) data.chats.forEach((chat) => {
@@ -288,6 +369,7 @@ function renderAgentState(data, { renderChat = true, keepPosition = false, force
   rawMessageLimit.textContent = String(memory.raw_message_limit || 5);
   workingFacts.textContent = String(memory.working_facts || 0);
   longTermFacts.textContent = String(memory.long_term_facts || 0);
+  invariantFacts.textContent = String(memory.invariant_facts || 0);
   summaryStatus.textContent = memory.summary_present ? 'Активный' : 'Пустой';
   pendingSummaryMessages.textContent = String(memory.pending_summary_messages || 0);
   memoryDescription.textContent = 'Последние ' + (memory.raw_message_limit || 5) + ' сообщений и summary каждые ' + (memory.summary_every_requests || 5) + ' запросов — только этого чата. Рабочая память изолирована; долговременная общая.';
@@ -299,6 +381,7 @@ function renderAgentState(data, { renderChat = true, keepPosition = false, force
   totalCost.textContent = formatUsd(data.usage?.cost_usd?.total);
   renderFacts(workingMemoryList, data.working_memory);
   renderFacts(longTermMemoryList, data.long_term_memory);
+  renderInvariants(data.project_invariants);
   if (renderChat) renderConversation(data.conversation, keepPosition);
   renderNotice(data);
   updateControlState();
@@ -341,8 +424,10 @@ async function mutateState(url, payload, errorText, { forcePersonalization = fal
         personalizationInput.value = serverPersonalization;
         personalizationDirty = false;
       }
-      showNotice(data.input_rejected && !url.startsWith('/api/task/')
-          ? 'Данные отклонены input policy. Не сохраняйте секреты и опасные команды.' : errorText);
+      const serverTransitionError = url === TASK_TRANSITION_ENDPOINT
+        ? safeTransitionError(data.error, errorText) : '';
+      showNotice(serverTransitionError || (data.input_rejected && !url.startsWith('/api/task/')
+          ? 'Данные отклонены input policy. Не сохраняйте секреты и опасные команды.' : errorText));
       return false;
     }
     if (!renderAgentState(data, { keepPosition, forcePersonalization })) throw new Error('State response missing');
@@ -358,6 +443,16 @@ async function mutateState(url, payload, errorText, { forcePersonalization = fal
     requestPending = false;
     updateControlState();
   }
+}
+
+function safeTransitionError(value, fallback) {
+  if (typeof value !== 'string') return fallback;
+  const message = value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!message || message.length > 240 ||
+      /(?:bearer\s+|api[-_ ]?key|password|private[-_ ]?key|\btoken\b|\bsk-[a-z0-9_-]+)/i.test(message)) {
+    return fallback;
+  }
+  return message;
 }
 
 async function askAgent(question) {
@@ -378,9 +473,16 @@ async function askAgent(question) {
     const data = await response.json();
     if (!response.ok) {
       pendingMessage.remove();
-      const error = data.input_rejected ? 'Сообщение отклонено input policy. Уберите секреты или запросы на выполнение опасных команд.' : 'Не удалось завершить запрос. Попробуйте ещё раз.';
+      const serverError = typeof data.error === 'string' ? data.error : '';
+      const lifecycleError = data.input_rejected && /^(Task stages can change|Task changes are not allowed|Task is paused|Task is complete|Create a plan|Complete execution|Only an executing task)/.test(serverError);
+      const error = lifecycleError ? serverError : data.input_rejected
+        ? 'Сообщение отклонено input policy. Уберите секреты или запросы на выполнение опасных команд.'
+        : 'Не удалось завершить запрос. Попробуйте ещё раз.';
       // Provider error bodies and rejected user text are never shown.
-      if (data.memory) renderAgentState(data, { renderChat: false });
+      // Rebuild the transcript as well: another tab may have changed the
+      // lifecycle while this request was in flight, so stale inline actions
+      // must never remain below old messages.
+      if (data.memory) renderAgentState(data);
       addMessage('error', error);
       return;
     }
@@ -452,6 +554,27 @@ personalizationForm.addEventListener('submit', (event) => {
   personalizationDirty = false;
   mutateState('/api/personalization', { text }, 'Не удалось сохранить персонализацию.', { forcePersonalization: true });
 });
+invariantForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (requestPending || !activeChatId) return;
+  const text = invariantText.value.trim();
+  if (!text) return;
+  const updating = !!editingInvariantKey;
+  const endpoint = updating ? '/api/invariants/update' : '/api/invariants';
+  const key = updating ? editingInvariantKey : 'restriction.' + Date.now();
+  const payload = {
+    project_id: activeChatId,
+    key,
+    value: text,
+    description: 'Explicit user-defined project restriction.'
+  };
+  if (updating) payload.current_key = editingInvariantKey;
+  if (await mutateState(endpoint, payload,
+                        updating ? 'Could not update invariant.' : 'Could not add invariant.')) {
+    resetInvariantForm();
+  }
+});
+cancelInvariantEditButton.addEventListener('click', resetInvariantForm);
 chatSidebarToggle.addEventListener('click', () => {
   setChatSidebarCollapsed(!workspace.classList.contains('chats-collapsed'));
 });

@@ -1,23 +1,29 @@
 {
-    "version": "0.2.0",
-    "configurations": [
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "OpenAI Web Chat (CMake)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\build\\mingw-debug\\openai_cli.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}\\.env",
+      "environment": [
         {
-            "name": "OpenAI Web Chat",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}\\main.exe",
-            "args": ["--web"],
-            "cwd": "${workspaceFolder}",
-            "environment": [],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "miDebuggerPath": "C:\\msys64\\ucrt64\\bin\\gdb.exe",
-            "preLaunchTask": "Build OpenAI Web Chat",
-            "serverReadyAction": {
-                "pattern": "Open (http://127\\.0\\.0\\.1:8080)",
-                "uriFormat": "%s",
-                "action": "openExternally"
-            }
+          "name": "PATH",
+          "value": "C:\\msys64\\ucrt64\\bin;${env:PATH}"
         }
-    ]
+      ],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "C:\\msys64\\ucrt64\\bin\\gdb.exe",
+      "preLaunchTask": "Build OpenAI Web Chat (CMake)",
+      "serverReadyAction": {
+        "pattern": "Open (http://127\\.0\\.0\\.1:8080)",
+        "uriFormat": "%s",
+        "action": "openExternally"
+      }
+    }
+  ]
 }

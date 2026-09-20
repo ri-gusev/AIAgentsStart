@@ -81,19 +81,37 @@ input, select { width: 100%; min-width: 0; color: var(--ink); border: 1px solid 
 .question-title-row { display: flex; align-items: center; gap: 10px; }
 .question-copy h2 { margin: 7px 0; font: 400 clamp(24px, 2.5vw, 34px)/1.12 Georgia, serif; letter-spacing: -.035em; overflow-wrap: anywhere; }
 .question-copy p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; max-width: 470px; }
-.task-state-badge { padding: 5px 8px; border-radius: 999px; color: white; background: var(--green); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.task-state-panel { flex-shrink: 0; margin-bottom: 12px; padding: 13px 15px; border: 1px solid var(--line); border-radius: 16px; background: rgba(238,242,255,.72); }
+.task-state-panel.paused { border-color: #e2c689; background: #fff9e9; }
+.task-state-panel.done { border-color: rgba(15,118,110,.3); background: rgba(236,253,250,.75); }
+.task-state-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.task-state-eyebrow { color: var(--orange); font-size: 8px; font-weight: 700; letter-spacing: .15em; }
+.task-state-header h3 { margin: 3px 0 0; font: 400 17px/1.1 Georgia, serif; }
+.task-state-badge { flex-shrink: 0; padding: 5px 8px; border-radius: 999px; color: white; background: var(--green); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .task-state-badge.paused { color: #704d00; background: #fde7a7; }
-.chat-state-banner { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 10px; margin: 0 0 12px; padding: 11px 14px; flex-shrink: 0; border: 1px solid #b8c2f0; border-left: 5px solid var(--green); border-radius: 12px; background: #edf0ff; box-shadow: 0 7px 18px rgba(68,87,196,.09); }
-.chat-state-banner > span { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-.chat-state-banner strong { color: var(--green); font-size: 13px; letter-spacing: .06em; }
-.chat-state-banner p { margin: 0; color: #454b6c; font-size: 11px; line-height: 1.4; text-align: right; }
-.chat-state-banner[data-state="execution"] { border-color: #9fd7cb; border-left-color: var(--blue); background: #ecfaf7; }
-.chat-state-banner[data-state="execution"] strong { color: var(--blue); }
-.chat-state-banner[data-state="validation"] { border-color: #e6c78d; border-left-color: #b7791f; background: #fff8e8; }
-.chat-state-banner[data-state="validation"] strong { color: #9a640f; }
-.chat-state-banner[data-state="DONE"] { border-color: #91d2ad; border-left-color: #168755; background: #eaf8f1; }
-.chat-state-banner[data-state="DONE"] strong { color: #117044; }
-.chat-state-banner[data-state="paused"] { border-color: #c7cad8; border-left-color: #777b91; background: #f3f4f8; }
+.task-stepper { margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); list-style: none; }
+.task-state-step { position: relative; min-width: 0; display: grid; justify-items: center; gap: 5px; color: #949ab1; cursor: default; user-select: none; }
+.task-state-step::after { content: ""; position: absolute; z-index: 0; top: 13px; left: calc(50% + 17px); right: calc(-50% + 17px); height: 2px; background: #d5daea; }
+.task-state-step:last-child::after { display: none; }
+.task-step-marker { position: relative; z-index: 1; width: 28px; height: 28px; display: grid; place-items: center; border: 2px solid #cbd1e4; border-radius: 50%; color: #7f879f; background: var(--surface); font-size: 10px; font-weight: 700; }
+.task-step-label { min-width: 0; font-size: 9px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; overflow-wrap: anywhere; }
+.task-state-step.is-completed { color: var(--blue); }
+.task-state-step.is-completed::after { background: rgba(15,118,110,.45); }
+.task-state-step.is-completed .task-step-marker { color: white; border-color: var(--blue); background: var(--blue); }
+.task-state-step.is-current { color: var(--green); }
+.task-state-step.is-current .task-step-marker { color: white; border-color: var(--green); background: var(--green); box-shadow: 0 0 0 4px rgba(68,87,196,.13); }
+.task-state-step.is-current.is-completed .task-step-marker { border-color: var(--blue); background: var(--blue); box-shadow: 0 0 0 4px rgba(15,118,110,.13); }
+.task-state-step.is-current.is-paused { color: #806018; }
+.task-state-step.is-current.is-paused .task-step-marker { color: #704d00; border-color: #ddb753; background: #fde7a7; box-shadow: 0 0 0 4px rgba(221,183,83,.16); }
+.task-state-step.is-future { pointer-events: none; }
+.task-state-actions { margin-top: 12px; padding-top: 11px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; border-top: 1px solid var(--line); }
+.task-state-actions:empty { display: none; }
+.task-state-action { min-height: 34px; padding: 7px 11px; border: 1px solid #c6cdeb; border-radius: 9px; color: var(--green); background: white; font-size: 10px; font-weight: 700; }
+.task-state-action:hover:not(:disabled) { background: var(--paper); }
+.task-state-action.primary { color: white; border-color: var(--green); background: var(--green); }
+.task-state-action.primary:hover:not(:disabled) { background: #3548ad; }
+.task-state-action.pause { color: #775711; border-color: #e2c689; background: #fff9e9; }
+.task-state-action.pause:hover:not(:disabled) { background: #fff2ca; }
 .chat-notice { margin: 0 0 10px; padding: 10px 13px; border: 1px solid #e2c689; border-radius: 12px; color: #705515; background: #fff9e9; font-size: 12px; line-height: 1.45; max-height: 80px; overflow-y: auto; flex-shrink: 0; }
 .chat-notice[hidden] { display: none; }
 .chat-log { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; overscroll-behavior: contain; padding: 6px 4px 6px 0; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--green) transparent; }
@@ -108,14 +126,6 @@ input, select { width: 100%; min-width: 0; color: var(--ink); border: 1px solid 
 .message-content { color: #30354f; font-size: 14px; line-height: 1.62; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-message.user .message-content { color: white; }
 .message-content.loading { color: var(--muted); }
-.message-task-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 13px; padding-top: 11px; border-top: 1px solid var(--line); }
-.message-task-status { margin-right: auto; color: var(--green); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-.message-task-action { padding: 7px 10px; border: 1px solid #c6cdeb; border-radius: 9px; color: var(--green); background: var(--paper); font-size: 10px; font-weight: 700; }
-.message-task-action:first-of-type { color: white; border-color: var(--green); background: var(--green); }
-.message-task-action:hover:not(:disabled) { filter: brightness(.96); }
-.message-task-details { flex-basis: 100%; color: var(--muted); font-size: 10px; line-height: 1.5; }
-.message-task-details summary { cursor: pointer; color: var(--green); font-weight: 700; }
-.message-task-details div { margin-top: 7px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .composer-panel { padding-top: 14px; flex-shrink: 0; }
 .composer { padding: 8px 8px 8px 16px; display: flex; align-items: flex-end; gap: 10px; border: 1px solid #c6cdeb; border-radius: 18px; background: white; box-shadow: 0 12px 30px rgba(68,87,196,.10); }
 .composer:focus-within { border-color: var(--green); box-shadow: 0 0 0 3px rgba(68,87,196,.12); }
@@ -136,6 +146,16 @@ textarea::placeholder, input::placeholder { color: #929ab3; }
 .memory-stats dt { color: var(--muted); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
 .memory-stats dd { margin: 3px 0 0; color: var(--ink); font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }
 .fact-panel summary { cursor: pointer; font-size: 12px; font-weight: 700; line-height: 1.5; }
+.invariant-panel summary { cursor: pointer; color: var(--green); font-size: 12px; font-weight: 700; line-height: 1.5; }
+.invariant-list { margin: 10px 0; display: grid; gap: 8px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.invariant-item { padding: 9px; border: 1px solid #c6cdeb; border-radius: 10px; background: rgba(255,255,255,.78); }
+.invariant-item p { margin: 0; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.invariant-item-actions { display: flex; gap: 6px; margin-top: 8px; }
+.invariant-item-actions button { padding: 5px 7px; border-radius: 7px; font-size: 10px; }
+.invariant-form { display: grid; gap: 7px; }
+.invariant-form textarea { min-height: 48px; max-height: 90px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 10px; background: white; font-size: 11px; resize: vertical; }
+.invariant-actions { display: flex; gap: 7px; }
+.invariant-actions button { flex: 1; padding: 8px; font-size: 10px; }
 .fact-list { margin-top: 12px; font-size: 11px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
 .fact-item + .fact-item { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .fact-key { display: block; margin-bottom: 2px; font-size: 10px; color: var(--green); }
@@ -171,8 +191,11 @@ textarea::placeholder, input::placeholder { color: #929ab3; }
   .question-panel { padding: 12px 0 10px; }
   .question-copy h2 { font-size: 24px; }
   .question-copy > span { font-size: 8px; }
-  .chat-state-banner { grid-template-columns: auto 1fr; }
-  .chat-state-banner p { grid-column: 1 / -1; text-align: left; }
+  .task-state-panel { padding: 11px 12px; }
+  .task-stepper { margin-top: 10px; }
+  .task-step-label { font-size: 8px; }
+  .task-state-actions { justify-content: stretch; }
+  .task-state-action { flex: 1 1 130px; }
   .status { display: none; }
   .sidebar-toggle { padding: 7px 9px; font-size: 10px; }
   .masthead { padding-bottom: 12px; }
@@ -191,5 +214,9 @@ textarea::placeholder, input::placeholder { color: #929ab3; }
   .question-copy p { display: none; }
   .question-copy h2 { margin: 4px 0; font-size: 23px; }
   .question-copy > span { display: none; }
+  .task-state-panel { margin-bottom: 8px; padding-top: 9px; padding-bottom: 9px; }
+  .task-state-header h3 { font-size: 15px; }
+  .task-stepper { margin-top: 8px; }
+  .task-state-actions { margin-top: 8px; padding-top: 8px; }
   .composer-panel { padding-top: 8px; }
 }

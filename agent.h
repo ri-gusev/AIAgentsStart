@@ -1,6 +1,7 @@
 #pragma once
 
 #include "api_client.h"
+#include "invariant_store.h"
 #include "memory_store.h"
 
 #include <cstddef>
@@ -65,6 +66,7 @@ public:
     const std::string& personalization() const;
     const std::vector<LongTermMemoryFact>& workingMemoryFacts() const;
     const std::vector<LongTermMemoryFact>& longTermMemoryFacts() const;
+    const std::vector<ProjectInvariant>& projectInvariants() const;
     const ProjectTaskState& taskState() const;
     const std::string& projectSummary() const;
     bool createChat(const std::string& name, std::string& error);
@@ -72,6 +74,12 @@ public:
     bool selectChat(const std::string& chatId, std::string& error);
     bool setMemoryMode(const std::string& mode, std::string& error);
     bool setPersonalization(const std::string& text, std::string& error);
+    bool createInvariant(const std::string& projectId, const ProjectInvariant& invariant,
+                         std::string& error);
+    bool updateInvariant(const std::string& projectId, const std::string& currentKey,
+                         const ProjectInvariant& invariant, std::string& error);
+    bool deleteInvariant(const std::string& projectId, const std::string& key,
+                         std::string& error);
     bool saveMessageToMemory(const std::string& chatId, const std::string& messageId,
                              const std::string& target, std::string& error);
     bool respondInChat(const std::string& chatId, const std::string& userMessage,
@@ -80,6 +88,7 @@ public:
                            std::string& answer, std::string& error);
     bool generateTaskPlan(const std::string& taskRequest, std::string& plan,
                           std::string& error);
+    bool performTaskAction(const std::string& action, std::string& error);
     bool approveTaskPlan(std::string& error);
     bool reviseTaskPlan(const std::string& feedback, std::string& plan,
                         std::string& error);
@@ -100,6 +109,7 @@ private:
         std::size_t shortTermMemoryMessages = 5;
         std::size_t summaryEveryRequests = 5;
         std::string longTermMemoryDatabase = "agent_memory.db";
+        std::string invariantsDatabase = "project_invariants.db";
         double inputPricePerMillion = 0.0;
         double cachedInputPricePerMillion = 0.0;
         double outputPricePerMillion = 0.0;
@@ -109,12 +119,25 @@ private:
         std::vector<ChatMessage> rawHistory;
         std::vector<ChatMessage> transcript;
         std::vector<LongTermMemoryFact> workingFacts;
+        std::vector<ProjectInvariant> invariants;
         std::string summary;
         std::string projectSummary;
         ProjectTaskState task;
         std::size_t completedRequests = 0;
         std::size_t nextMessageId = 1;
         bool summaryRetryPending = false;
+        bool phaseRunning = false;
+    };
+
+    enum class TaskAction {
+        CreateTask,
+        ApprovePlan,
+        RegeneratePlan,
+        ExecutionFinished,
+        ValidationPassed,
+        ValidationFailed,
+        Pause,
+        Resume
     };
 
     ChatState& activeChat();
@@ -122,6 +145,7 @@ private:
     void clearRequestStatus();
     std::string baseInstruction() const;
     std::string buildWorkingMemoryPrompt() const;
+    std::string buildInvariantPrompt() const;
 
     bool loadConfig(const std::string& configPath, std::string& error);
     bool applyInputPolicy(const std::string& userMessage, std::string& error);
@@ -129,6 +153,15 @@ private:
     bool reloadLongTermMemory(std::string& error);
     bool reloadWorkingMemory(const std::string& chatId, std::string& error);
     bool reloadProjectData(const std::string& chatId, std::string& error);
+    bool reloadInvariants(const std::string& chatId, std::string& error);
+    bool validateInvariant(const ProjectInvariant& invariant, std::string& error) const;
+    bool transitionTask(const std::string& taskId, TaskAction action, ProjectTaskState next,
+                        std::string& error, const std::string* pauseSummary = nullptr);
+    bool runValidationPhase(std::string& error);
+    bool processUserMessage(const std::string& userMessage, std::string& answer,
+                            std::string& error);
+    bool generateOrdinaryAnswer(const std::string& userMessage, std::string& answer,
+                                std::string& error);
     std::string buildTaskPlanConversation(const std::string& taskRequest) const;
     std::string buildValidationConversation() const;
     std::string buildProjectPauseConversation() const;
@@ -160,6 +193,7 @@ private:
     std::string apiKey_;
     ApiClient apiClient_;
     std::unique_ptr<MemoryStore> memoryStore_;
+    std::unique_ptr<InvariantStore> invariantStore_;
     std::string initializationError_;
     std::vector<StoredChat> chats_;
     std::map<std::string, ChatState> chatStates_;
