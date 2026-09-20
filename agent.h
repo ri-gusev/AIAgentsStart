@@ -136,6 +136,8 @@ private:
         ExecutionFinished,
         ValidationPassed,
         ValidationFailed,
+        ExecutionResultReady,
+        ValidationResultReady,
         Pause,
         Resume
     };

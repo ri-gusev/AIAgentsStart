@@ -902,6 +902,13 @@ void testTaskStateMachineAndPausePersistence() {
                 stored.plan == planV1 && observer.loadProjectSummary(chatId, storedSummary, error) &&
                 storedSummary.empty(), "Structured planning was not persisted for later approval");
 
+        enqueue(planV1);
+        enqueue("{\"accepted\":true}");
+        require(agent.performTaskAction("REGENERATE_PLAN", error) &&
+                agent.taskState().state == "PLANNING" &&
+                agent.taskState().plan == planV1,
+                "REGENERATE_PLAN was not executable for an existing planning-stage plan");
+
         enqueue("PROJECT_PAUSE_SUMMARY");
         require(agent.performTaskAction("PAUSE", error) &&
                 agent.taskState().state == "PAUSED" &&
@@ -927,17 +934,33 @@ void testTaskStateMachineAndPausePersistence() {
 
         enqueue("EXECUTION_V1");
         enqueue("{\"accepted\":true}");
-        enqueue("{\"passed\":true,\"report\":\"All planned checks passed\"}");
         require(agent.performTaskAction("APPROVE_PLAN", error) &&
-                agent.taskState().state == "DONE" &&
-                observer.loadTaskState(chatId, stored, error) && stored.state == "DONE" &&
-                stored.plan == planV1 && stored.executionCompleted &&
-                stored.validationReport == "All planned checks passed",
-                "Approve did not run the automatic EXECUTION/VALIDATION/DONE chain");
-        require(agent.visibleConversation().size() >= 5 &&
-                agent.visibleConversation()[2].content.find("EXECUTION_V1") != std::string::npos &&
-                agent.visibleConversation().back().content.find("State: DONE") != std::string::npos,
-                "Automatic phases did not produce separate visible assistant messages");
+                agent.taskState().state == "EXECUTION" && agent.taskState().executionCompleted &&
+                observer.loadTaskState(chatId, stored, error) && stored.state == "EXECUTION" &&
+                stored.plan == planV1 && stored.executionCompleted && stored.validationReport.empty(),
+                "Approve did not stop after the execution result");
+        bool sawExecution = false;
+        bool sawExecutionConfirmation = false;
+        for (const auto& message : agent.visibleConversation()) {
+            sawExecution = sawExecution || message.content.find("EXECUTION_V1") != std::string::npos;
+            sawExecutionConfirmation = sawExecutionConfirmation ||
+                message.content.find("Перейти к validation") != std::string::npos;
+        }
+        require(agent.visibleConversation().size() >= 5 && sawExecution && sawExecutionConfirmation,
+                "Execution phase did not produce a separate confirmation message");
+
+        enqueue("{\"passed\":true,\"report\":\"All planned checks passed\"}");
+        require(agent.performTaskAction("EXECUTION_FINISHED", error) &&
+                agent.taskState().state == "VALIDATION" && agent.taskState().validationPassed &&
+                agent.taskState().validationReport == "All planned checks passed" &&
+                observer.loadTaskState(chatId, stored, error) && stored.state == "VALIDATION",
+                "Execution confirmation did not enter validation");
+        require(agent.performTaskAction("VALIDATION_PASSED", error) &&
+                agent.taskState().state == "DONE" && observer.loadTaskState(chatId, stored, error) &&
+                stored.state == "DONE" && stored.validationPassed,
+                "Successful validation was not confirmed to DONE");
+        require(agent.visibleConversation().back().content.find("State: DONE") != std::string::npos,
+                "DONE confirmation was not rendered as a separate assistant message");
 
         const auto callsBeforeForbidden = calls.size();
         bool passed = false;
@@ -955,11 +978,12 @@ void testTaskStateMachineAndPausePersistence() {
                 "DONE accepted another chat request");
 
         std::vector<TaskTransitionLog> log;
-        require(observer.loadTaskTransitionLog(chatId, log, error) && log.size() >= 7,
+        require(observer.loadTaskTransitionLog(chatId, log, error) && log.size() >= 10,
                 "Task transition log was not persisted");
         const std::vector<std::string> expectedActions = {
-            "CREATE_TASK", "CREATE_TASK", "PAUSE", "RESUME", "APPROVE_PLAN",
-            "EXECUTION_FINISHED", "VALIDATION_PASSED"
+            "CREATE_TASK", "CREATE_TASK", "REGENERATE_PLAN", "PAUSE", "RESUME",
+            "APPROVE_PLAN", "EXECUTION_RESULT_READY", "EXECUTION_FINISHED",
+            "VALIDATION_RESULT_READY", "VALIDATION_PASSED"
         };
         for (std::size_t index = 0; index < expectedActions.size(); ++index) {
             require(log[index].action == expectedActions[index] && !log[index].timestamp.empty(),
@@ -1037,23 +1061,36 @@ void testChatDrivenPlanningAndAutomaticMemory() {
 
     enqueue("INLINE_EXECUTION_RESULT");
     enqueue("{\"accepted\":true}");
-    enqueue("{\"passed\":false,\"report\":\"Add offline mode in execution\"}");
     require(agent.performTaskAction("APPROVE_PLAN", error) &&
             agent.taskState().state == "EXECUTION" &&
-            !agent.taskState().executionCompleted &&
+            agent.taskState().executionCompleted && agent.taskState().validationReport.empty(),
+            "Approve did not stop at the execution confirmation");
+    enqueue("{\"passed\":false,\"report\":\"Add offline mode in execution\"}");
+    require(agent.performTaskAction("EXECUTION_FINISHED", error) &&
+            agent.taskState().state == "VALIDATION" && !agent.taskState().validationPassed &&
             agent.taskState().validationReport == "Add offline mode in execution",
-            "Failed automatic validation did not return to EXECUTION");
+            "Validation did not expose a failed report for confirmation");
+    require(agent.performTaskAction("VALIDATION_FAILED", error) &&
+            agent.taskState().state == "EXECUTION" && !agent.taskState().executionCompleted,
+            "Failed validation did not return to execution through its button");
 
     enqueue("EXECUTION_WITH_VALIDATION_CORRECTION");
     enqueue("{\"accepted\":true}");
     enqueue("{\"working_facts\":[],\"long_term_facts\":[]}");
-    enqueue("{\"passed\":true,\"report\":\"Corrected execution passes review\"}");
     require(agent.handleChatMessage(agent.activeChatId(), "Implement the offline-mode correction",
                                     answer, error) &&
-            agent.taskState().state == "DONE" &&
+            agent.taskState().state == "EXECUTION" &&
             agent.taskState().executionCompleted &&
+            agent.taskState().validationReport.empty(),
+            "A corrective execution message did not stop for validation confirmation");
+    enqueue("{\"passed\":true,\"report\":\"Corrected execution passes review\"}");
+    require(agent.performTaskAction("EXECUTION_FINISHED", error) &&
+            agent.taskState().state == "VALIDATION" && agent.taskState().validationPassed,
+            "Corrected execution did not enter validation");
+    require(agent.performTaskAction("VALIDATION_PASSED", error) &&
+            agent.taskState().state == "DONE" && agent.taskState().executionCompleted &&
             agent.taskState().validationReport == "Corrected execution passes review",
-            "A corrective execution message did not automatically revalidate to DONE");
+            "Successful validation confirmation did not finish the task");
     require(replies.empty(), "Chat-driven planning left unused mock replies");
 }
 
@@ -1233,6 +1270,11 @@ void testTaskClassificationAndTransitionGuards() {
             agent.inputRejected() && agent.taskState().state == "PLANNING" &&
             agent.taskState().plan == plan && calls.size() == callsBeforeSkip,
             "The required Russian chat bypass phrase changed state or called the model");
+    require(!agent.handleChatMessage(agent.activeChatId(),
+                                     "закончить план и перейти дальше", answer, error) &&
+            agent.inputRejected() && agent.taskState().state == "PLANNING" &&
+            calls.size() == callsBeforeSkip,
+            "The explicit finish-plan chat phrase changed state or called the model");
     bool passed = false;
     require(!agent.moveTaskToValidation(error) && agent.inputRejected() &&
             !agent.validateTask(passed, error),
@@ -1240,11 +1282,10 @@ void testTaskClassificationAndTransitionGuards() {
 
     enqueue("GUARDED_EXECUTION");
     enqueue("{\"accepted\":true}");
-    enqueue("{\"passed\":false,\"report\":\"Fix guarded execution\"}");
     require(agent.performTaskAction("APPROVE_PLAN", error) &&
             agent.taskState().state == "EXECUTION" &&
-            !agent.taskState().executionCompleted,
-            "Explicit action did not run execution and failed validation automatically");
+            agent.taskState().executionCompleted,
+            "Explicit action did not stop after execution");
     const auto callsBeforeExecutionSkip = calls.size();
     require(!agent.handleChatMessage(agent.activeChatId(), "Go to validation now", answer, error) &&
             agent.inputRejected() && agent.taskState().state == "EXECUTION" &&
@@ -1300,10 +1341,14 @@ void testProjectInvariantsAreSeparatePersistentAndOutputOnly() {
             {"PROJECT RESPONSE INVARIANTS", "Verify the draft against the output policy"});
     enqueue("INVARIANT_COMPLIANT_EXECUTION");
     enqueue("{\"accepted\":true}");
-    enqueue("{\"passed\":true,\"report\":\"Invariant-compliant result\"}");
-    require(agent.performTaskAction("APPROVE_PLAN", error) && agent.taskState().state == "DONE" &&
+    require(agent.performTaskAction("APPROVE_PLAN", error) && agent.taskState().state == "EXECUTION" &&
             agent.taskState().executionCompleted,
             "Output-only invariants incorrectly blocked explicit plan execution");
+    enqueue("{\"passed\":true,\"report\":\"Invariant-compliant result\"}");
+    require(agent.performTaskAction("EXECUTION_FINISHED", error) &&
+            agent.taskState().state == "VALIDATION" && agent.taskState().validationPassed &&
+            agent.performTaskAction("VALIDATION_PASSED", error) && agent.taskState().state == "DONE",
+            "Output-only invariants blocked explicit validation confirmation");
 
     ProjectInvariant updated{"deployment.data_region", "EU only", "Updated explicit rationale."};
     require(agent.updateInvariant(firstProject, "deployment.region", updated, error) &&

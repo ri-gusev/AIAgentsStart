@@ -133,9 +133,9 @@ Summary, raw-буфер и счётчик запросов отдельны дл
 Каждый чат-проект имеет отдельную запись в `project_task_states` и `project_summaries`:
 
 ```text
-PLANNING --APPROVE_PLAN--> EXECUTION --EXECUTION_FINISHED--> VALIDATION
+PLANNING --APPROVE_PLAN--> EXECUTION --EXECUTION_FINISHED (button)--> VALIDATION
                               ^                                |      |
-                              |------ VALIDATION_FAILED -------|      |
+                              |------ VALIDATION_FAILED (button)|      |
                                                                | VALIDATION_PASSED
                                                                v
                                                               DONE
@@ -145,8 +145,8 @@ DONE --CREATE_TASK--> PLANNING
 ```
 
 - `PLANNING`: Agent формирует и сохраняет структурированный план, после чего останавливается. Только кнопка `Approve Plan` отправляет action `APPROVE_PLAN`; текст «апрувни план», «продолжай» или «переходи дальше» не меняет состояние.
-- `EXECUTION`: Agent выполняет утверждённый план. После готового результата внутренний action `EXECUTION_FINISHED` автоматически переводит задачу в `VALIDATION`.
-- `VALIDATION`: Agent выполняет статическую смысловую проверку без компиляции и запуска файлов. Успех автоматически даёт `DONE`, провал сохраняет отчёт и автоматически возвращает задачу в `EXECUTION`.
+- `EXECUTION`: Agent выполняет утверждённый план и останавливается с готовым результатом. Кнопка `Проверить / Перейти к validation` подтверждает завершение execution и запускает проверку.
+- `VALIDATION`: Agent выполняет статическую смысловую проверку без компиляции и запуска файлов. После отчёта пользователь нажимает `Завершить задачу / DONE` при успехе или `Вернуться к execution` при замечаниях.
 - `DONE`: доступен только `New Task`, который начинает новый цикл с `PLANNING`.
 - `PAUSED`: при Pause Agent сохраняет project summary и исходный этап в `resume_state`; Resume возвращает задачу ровно в этот этап.
 
@@ -338,7 +338,7 @@ g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\web_parser_tests.cpp agent.cpp 
 | `POST /api/task/plan` | `{"chat_id":"1","task_request":"Описание задачи"}` | Совместимый маршрут: отправить первое planning-сообщение в чат |
 | `POST /api/task/revise` | `{"chat_id":"1","feedback":"Что изменить"}` | Переделать текущий план |
 
-Публичные actions: `APPROVE_PLAN`, `REGENERATE_PLAN`, `PAUSE`, `RESUME`, `CREATE_TASK`. Actions `EXECUTION_FINISHED`, `VALIDATION_PASSED`, `VALIDATION_FAILED` внутренние: попытка отправить их из браузера отклоняется. Старые `/api/task/approve`, `/api/task/pause`, `/api/task/resume` оставлены как совместимые обёртки над тем же валидатором; ручные `/validation`, `/validate`, `/execution` больше не выполняют переходы.
+Публичные actions кнопок: `APPROVE_PLAN`, `REGENERATE_PLAN`, `EXECUTION_FINISHED`, `VALIDATION_PASSED`, `VALIDATION_FAILED`, `PAUSE`, `RESUME`, `CREATE_TASK`. Все они проходят один серверный валидатор; клиент не может выбрать произвольное состояние. Старые `/api/task/approve`, `/api/task/pause`, `/api/task/resume` оставлены как совместимые обёртки; ручные `/validation`, `/validate`, `/execution` не обходят конечную машину.
 
 `chat_id` — строковый ID, полученный из `chats`. Ручных маршрутов сохранения памяти нет: после каждого успешного хода Agent сам обновляет short-term и вызывает router для working/long-term facts.
 

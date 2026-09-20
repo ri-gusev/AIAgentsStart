@@ -55,7 +55,7 @@ let serverPersonalization = '';
 let pendingDeleteChatId = '';
 let currentTask = {
   state: 'PLANNING', resume_state: 'PLANNING', plan: '',
-  validation_report: '', execution_completed: false
+  validation_report: '', execution_completed: false, validation_passed: false
 };
 let editingInvariantKey = '';
 
@@ -142,8 +142,7 @@ function updateControlState() {
   cancelInvariantEditButton.disabled = busy;
   invariantList.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
   taskStateActions.querySelectorAll('.task-state-action').forEach((button) => {
-    const needsPlan = button.dataset.requiresPlan === 'true';
-    button.disabled = busy || !activeChatId || (needsPlan && !currentTask.plan);
+    button.disabled = busy || !activeChatId;
   });
 }
 
@@ -185,9 +184,9 @@ function taskAction(label, action, errorText, { variant = '', requiresPlan = fal
   button.className = 'task-state-action' + (variant ? ' ' + variant : '');
   button.textContent = label;
   button.dataset.requiresPlan = String(requiresPlan);
-  button.disabled = requestPending || !activeChatId || (requiresPlan && !currentTask.plan);
+  button.disabled = requestPending || !activeChatId;
   if (requiresPlan && !currentTask.plan) {
-    button.title = 'Сначала отправьте задачу, чтобы Agent сформировал план.';
+    button.title = 'Сервер проверит наличие утверждаемого плана.';
   }
   button.addEventListener('click', async () => {
     const accepted = await mutateState(
@@ -212,9 +211,23 @@ function renderTaskActions() {
     );
   } else if (currentTask.state === 'EXECUTION') {
     taskStateActions.append(
+      ...(currentTask.execution_completed ? [taskAction(
+        'Проверить / Перейти к validation', 'EXECUTION_FINISHED',
+        'Не удалось запустить validation.', { variant: 'primary' })] : []),
       taskAction('Пауза', 'PAUSE', 'Не удалось поставить задачу на паузу.',
                  { variant: 'pause' })
     );
+  } else if (currentTask.state === 'VALIDATION') {
+    if (currentTask.validation_report) {
+      taskStateActions.append(
+        taskAction(currentTask.validation_passed ? 'Завершить задачу / DONE' : 'Вернуться к execution',
+                   currentTask.validation_passed ? 'VALIDATION_PASSED' : 'VALIDATION_FAILED',
+                   currentTask.validation_passed
+                     ? 'Не удалось завершить задачу.'
+                     : 'Не удалось вернуть задачу в execution.',
+                   { variant: 'primary' })
+      );
+    }
   } else if (currentTask.state === 'DONE') {
     taskStateActions.append(
       taskAction('New Task / Новая задача', 'CREATE_TASK',
@@ -323,7 +336,8 @@ function renderTaskState(data) {
     resume_state: resumeState,
     plan: typeof received.plan === 'string' ? received.plan : '',
     validation_report: typeof received.validation_report === 'string' ? received.validation_report : '',
-    execution_completed: received.execution_completed === true
+    execution_completed: received.execution_completed === true,
+    validation_passed: received.validation_passed === true
   };
   taskStateBadge.textContent = state === 'PAUSED' ? 'PAUSED · ' + resumeState : state;
   taskStateBadge.classList.toggle('paused', state === 'PAUSED');
@@ -474,7 +488,7 @@ async function askAgent(question) {
     if (!response.ok) {
       pendingMessage.remove();
       const serverError = typeof data.error === 'string' ? data.error : '';
-      const lifecycleError = data.input_rejected && /^(Task stages can change|Task changes are not allowed|Task is paused|Task is complete|Create a plan|Complete execution|Only an executing task)/.test(serverError);
+      const lifecycleError = data.input_rejected && /^(Переход между этапами|Task stages can change|Task changes are not allowed|Task is paused|Task is complete|Create a plan|Complete execution|Only an executing task)/.test(serverError);
       const error = lifecycleError ? serverError : data.input_rejected
         ? 'Сообщение отклонено input policy. Уберите секреты или запросы на выполнение опасных команд.'
         : 'Не удалось завершить запрос. Попробуйте ещё раз.';

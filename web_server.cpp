@@ -228,6 +228,7 @@ std::string buildAgentStateFields(const Agent& agent) {
         "\",\"plan\":\"" + jsonEscape(agent.taskState().plan) +
         "\",\"validation_report\":\"" + jsonEscape(agent.taskState().validationReport) +
         "\",\"execution_completed\":" + std::string(agent.taskState().executionCompleted ? "true" : "false") +
+        ",\"validation_passed\":" + std::string(agent.taskState().validationPassed ? "true" : "false") +
         ",\"paused\":" + std::string(agent.taskState().state == "PAUSED" ? "true" : "false") + "}" +
         ",\"project_summary\":\"" + jsonEscape(agent.projectSummary()) + "\"" +
         ",\"project_invariants\":" + invariantsJson(agent.projectInvariants()) +

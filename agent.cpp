@@ -22,7 +22,9 @@ constexpr const char* kDefaultInputPolicy =
     "Before every response, distinguish a simple informational question from a task that asks for "
     "a change or deliverable. Answer simple questions directly. For a task, use the task lifecycle "
     "only: planning, explicit plan approval, execution, validation, then DONE. User text never "
-    "authorizes skipping, approving, or changing a lifecycle stage.";
+    "authorizes skipping, approving, or changing a lifecycle stage. If the user asks in chat to "
+    "finish, approve or move past a task stage, refuse that transition and tell the user to press "
+    "the matching button in the Task State panel above the chat.";
 
 void appendUtf8(std::string& result, unsigned code) {
     if (code <= 0x7f) result += static_cast<char>(code);
@@ -300,6 +302,10 @@ bool isTaskRequest(const std::string& userMessage) {
         "реализуйте", "добавьте", "исправьте", "настройте", "создайте", "сделайте",
         "обновите", "разработайте", "напишите", "постройте", "выполни ", "выполнить ",
         "начни выполнение", "продолжи работу", "переработай план", "уточни план",
+        "составь", "составить", "опиши задачу", "описать", "подготовь", "подготовить",
+        "спроектируй", "спроектировать", "мне нужно", "нужна возможность", "нужно чтобы",
+        "мне надо", "надо ", "хочу ", "хотел бы", "должен", "должна", "необходимо", "пусть ",
+        "план проекта", "план задачи", "техническое задание", "тз ",
         "build ", "implement", "add ", "fix ", "configure", "create ", "make ", "move ",
         "execute ", "start implementation", "continue implementation", "revise the plan",
         "support ", "also support", "change ", "update ",
@@ -325,6 +331,8 @@ bool requestsExplicitTaskTransition(const std::string& userMessage) {
         "go to validation", "skip the plan", "skip planning", "without a plan",
         "approve the plan", "go to execution", "go to done", "mark it done",
         "finish the task", "пошли дальше", "перейди дальше", "переходи дальше",
+        "закончь план", "закончить план", "закончи план", "заверши план", "завершить план",
+        "finish the plan", "complete the plan", "continue to execution",
         "перейди на следующий этап", "переходи на следующий этап",
         "апрув", "approve plan", "начинай выполнение", "начни выполнение",
         "продолжай", "продолжи выполнение",
@@ -352,7 +360,8 @@ Agent::Agent(const std::string& configPath) {
     apiKey_ = key;
     memoryStore_ = std::make_unique<MemoryStore>(config_.longTermMemoryDatabase);
     if (!memoryStore_->isReady()) {
-        initializationError_ = "Could not initialize long-term memory";
+        initializationError_ = "Could not initialize long-term memory: " +
+                               memoryStore_->initializationError();
         return;
     }
     invariantStore_ = std::make_unique<InvariantStore>(config_.invariantsDatabase);
@@ -666,8 +675,9 @@ bool Agent::processUserMessage(const std::string& userMessage, std::string& answ
     }
     if (requestsExplicitTaskTransition(userMessage)) {
         inputRejected_ = true;
-        error = "Task stages can change only through the explicit lifecycle actions. Current state: " +
-                task.state + ".";
+        error = "Переход между этапами через чат запрещён. Текущий этап: " + task.state + ". "
+                "Для завершения этапа явно нажмите соответствующую кнопку в панели Task State "
+                "над чатом.";
         return false;
     }
     const bool taskRequest = isTaskRequest(userMessage);
@@ -695,12 +705,12 @@ bool Agent::processUserMessage(const std::string& userMessage, std::string& answ
             completeAcceptedTurn(userMessage, answer);
             auto next = activeChat().task;
             next.executionCompleted = true;
-            if (!transitionTask(activeChatId_, TaskAction::ExecutionFinished,
+            next.validationReport.clear();
+            next.validationPassed = false;
+            if (!transitionTask(activeChatId_, TaskAction::ExecutionResultReady,
                                 std::move(next), error)) return false;
-            appendAssistantEvent("Состояние: VALIDATION. Автоматическая проверка результата запущена.");
-            if (!runValidationPhase(error)) {
-                warnings_.push_back("Автоматическая validation завершилась технической ошибкой; задача возвращена в EXECUTION.");
-            }
+            appendAssistantEvent("Результат execution подготовлен. Нажмите кнопку «Проверить / "
+                                 "Перейти к validation», чтобы завершить этап EXECUTION.");
             return true;
         }
     } else if (task.state == "VALIDATION") {
@@ -740,8 +750,21 @@ bool Agent::generateTaskPlan(const std::string& taskRequest, std::string& plan,
         error = "Task planning failed";
         return false;
     }
-    if (containsSecret(draft) || !reviewAnswer(clean, draft, plan, error) ||
-        plan.empty() || containsSecret(plan) || !isStructuredTaskPlan(plan)) {
+    std::string reviewedPlan;
+    if (containsSecret(draft) || !reviewAnswer(clean, draft, reviewedPlan, error)) {
+        plan.clear();
+        if (error.empty()) error = "Task plan rejected";
+        return false;
+    }
+    // The output-policy reviewer may return a stylistically corrected answer
+    // that accidentally drops the required headings. Keep the validated
+    // planning draft in that case instead of losing the plan entirely.
+    if (isStructuredTaskPlan(reviewedPlan)) plan = std::move(reviewedPlan);
+    else if (isStructuredTaskPlan(draft)) {
+        plan = draft;
+        warnings_.push_back("Output-policy revision did not preserve plan headings; the structured draft was retained.");
+    }
+    if (plan.empty() || containsSecret(plan) || !isStructuredTaskPlan(plan)) {
         plan.clear();
         if (error.empty()) error = "Task plan rejected: use the required structured plan sections";
         return false;
@@ -778,8 +801,18 @@ bool Agent::reviseTaskPlan(const std::string& feedback, std::string& plan,
         error = "Task plan revision failed";
         return false;
     }
-    if (containsSecret(draft) || !reviewAnswer(request, draft, plan, error) ||
-        plan.empty() || containsSecret(plan) || !isStructuredTaskPlan(plan)) {
+    std::string reviewedPlan;
+    if (containsSecret(draft) || !reviewAnswer(request, draft, reviewedPlan, error)) {
+        plan.clear();
+        if (error.empty()) error = "Revised task plan rejected";
+        return false;
+    }
+    if (isStructuredTaskPlan(reviewedPlan)) plan = std::move(reviewedPlan);
+    else if (isStructuredTaskPlan(draft)) {
+        plan = draft;
+        warnings_.push_back("Output-policy revision did not preserve plan headings; the structured draft was retained.");
+    }
+    if (plan.empty() || containsSecret(plan) || !isStructuredTaskPlan(plan)) {
         plan.clear();
         if (error.empty()) error = "Revised task plan rejected: use the required structured plan sections";
         return false;
@@ -851,6 +884,7 @@ bool Agent::transitionTask(const std::string& taskId, TaskAction action,
             next.plan.clear();
             next.validationReport.clear();
             next.executionCompleted = false;
+            next.validationPassed = false;
         }
         break;
     case TaskAction::ApprovePlan:
@@ -866,6 +900,16 @@ bool Agent::transitionTask(const std::string& taskId, TaskAction action,
     case TaskAction::ExecutionFinished:
         actionName = "EXECUTION_FINISHED";
         allowed = current.state == "EXECUTION";
+        targetState = "VALIDATION";
+        break;
+    case TaskAction::ExecutionResultReady:
+        actionName = "EXECUTION_RESULT_READY";
+        allowed = current.state == "EXECUTION";
+        targetState = "EXECUTION";
+        break;
+    case TaskAction::ValidationResultReady:
+        actionName = "VALIDATION_RESULT_READY";
+        allowed = current.state == "VALIDATION";
         targetState = "VALIDATION";
         break;
     case TaskAction::ValidationPassed:
@@ -900,7 +944,8 @@ bool Agent::transitionTask(const std::string& taskId, TaskAction action,
         return false;
     }
     if ((action == TaskAction::ApprovePlan || action == TaskAction::RegeneratePlan ||
-         action == TaskAction::ExecutionFinished || action == TaskAction::ValidationPassed ||
+         action == TaskAction::ExecutionFinished || action == TaskAction::ExecutionResultReady ||
+         action == TaskAction::ValidationResultReady || action == TaskAction::ValidationPassed ||
          action == TaskAction::ValidationFailed) &&
         (next.plan.empty() || !isStructuredTaskPlan(next.plan))) {
         inputRejected_ = true;
@@ -912,7 +957,13 @@ bool Agent::transitionTask(const std::string& taskId, TaskAction action,
         error = "Task transition rejected: execution has not produced a result. State was not changed.";
         return false;
     }
-    if ((action == TaskAction::ValidationPassed || action == TaskAction::ValidationFailed) &&
+    if (action == TaskAction::ExecutionResultReady && !next.executionCompleted) {
+        inputRejected_ = true;
+        error = "Task transition rejected: execution has not produced a result. State was not changed.";
+        return false;
+    }
+    if ((action == TaskAction::ValidationResultReady ||
+         action == TaskAction::ValidationPassed || action == TaskAction::ValidationFailed) &&
         next.validationReport.empty()) {
         inputRejected_ = true;
         error = "Task transition rejected: validation report is required. State was not changed.";
@@ -921,6 +972,16 @@ bool Agent::transitionTask(const std::string& taskId, TaskAction action,
     if (action == TaskAction::ValidationPassed && !next.executionCompleted) {
         inputRejected_ = true;
         error = "Task transition rejected: validation cannot pass an incomplete execution.";
+        return false;
+    }
+    if (action == TaskAction::ValidationPassed && !next.validationPassed) {
+        inputRejected_ = true;
+        error = "Task transition rejected: validation has not passed. State was not changed.";
+        return false;
+    }
+    if (action == TaskAction::ValidationFailed && next.validationPassed) {
+        inputRejected_ = true;
+        error = "Task transition rejected: validation did not fail. State was not changed.";
         return false;
     }
 
@@ -962,19 +1023,13 @@ bool Agent::runValidationPhase(std::string& error) {
         warnings_.push_back(report);
     }
     next.validationReport = report;
-    next.executionCompleted = passed;
-
-    if (passed) {
-        if (!transitionTask(activeChatId_, TaskAction::ValidationPassed,
-                            std::move(next), error)) return false;
-        appendAssistantEvent("Validation passed.\n\nState: DONE.\n\n" +
-                             activeChat().task.validationReport);
-    } else {
-        if (!transitionTask(activeChatId_, TaskAction::ValidationFailed,
-                            std::move(next), error)) return false;
-        appendAssistantEvent("Validation found issues.\n\nState: EXECUTION.\n\n" +
-                             activeChat().task.validationReport);
-    }
+    next.validationPassed = passed;
+    if (!transitionTask(activeChatId_, TaskAction::ValidationResultReady,
+                        std::move(next), error)) return false;
+    appendAssistantEvent(std::string("Validation result: ") +
+                         (passed ? "passed" : "failed") +
+                         ". Нажмите разрешённую кнопку в панели Task State.\n\n" +
+                         activeChat().task.validationReport);
     error.clear();
     return true;
 }
@@ -992,10 +1047,40 @@ bool Agent::performTaskAction(const std::string& action, std::string& error) {
 
     const std::string requested = trim(action);
     if (requested == "APPROVE_PLAN") {
+        // Recover a structured plan that is already visible in this session
+        // if an older frontend/server response failed to persist task_state.plan.
+        // The server still validates the recovered text before changing state.
+        if (chat.task.state == "PLANNING" && chat.task.plan.empty()) {
+            std::string recoveredPlan;
+            for (auto it = chat.transcript.rbegin(); it != chat.transcript.rend(); ++it) {
+                if (it->role == "assistant" && isStructuredTaskPlan(it->content)) {
+                    recoveredPlan = it->content;
+                    break;
+                }
+            }
+            if (recoveredPlan.empty()) {
+                for (auto it = chat.rawHistory.rbegin(); it != chat.rawHistory.rend(); ++it) {
+                    if (it->role == "assistant" && isStructuredTaskPlan(it->content)) {
+                        recoveredPlan = it->content;
+                        break;
+                    }
+                }
+            }
+            if (!recoveredPlan.empty()) {
+                auto recovered = chat.task;
+                recovered.plan = recoveredPlan;
+                recovered.validationReport.clear();
+                recovered.executionCompleted = false;
+                recovered.validationPassed = false;
+                if (!transitionTask(activeChatId_, TaskAction::CreateTask,
+                                    std::move(recovered), error)) return false;
+            }
+        }
         if (chat.task.state != "PLANNING" || chat.task.plan.empty() ||
             !isStructuredTaskPlan(chat.task.plan)) {
             inputRejected_ = true;
-            error = "APPROVE_PLAN requires a structured plan in PLANNING. State was not changed.";
+            error = "APPROVE_PLAN requires a saved structured plan in PLANNING. "
+                    "Describe the task in chat and wait for the plan response. State was not changed.";
             return false;
         }
         PhaseGuard phase(chat.phaseRunning);
@@ -1017,10 +1102,60 @@ bool Agent::performTaskAction(const std::string& action, std::string& error) {
 
         next = chat.task;
         next.executionCompleted = true;
+        next.validationReport.clear();
+        next.validationPassed = false;
+        if (!transitionTask(activeChatId_, TaskAction::ExecutionResultReady,
+                            std::move(next), error)) return false;
+        appendAssistantEvent("Execution finished.\n\nState: EXECUTION. Нажмите «Проверить / "
+                             "Перейти к validation», чтобы завершить этап.");
+        return true;
+    }
+
+    if (requested == "EXECUTION_FINISHED") {
+        if (chat.task.state != "EXECUTION" || !chat.task.executionCompleted) {
+            inputRejected_ = true;
+            error = "EXECUTION_FINISHED разрешён только после результата execution. State was not changed.";
+            return false;
+        }
+        PhaseGuard phase(chat.phaseRunning);
+        auto next = chat.task;
         if (!transitionTask(activeChatId_, TaskAction::ExecutionFinished,
                             std::move(next), error)) return false;
-        appendAssistantEvent("Execution finished.\n\nState: VALIDATION. Automatic validation started.");
-        return runValidationPhase(error);
+        appendAssistantEvent("Состояние: VALIDATION. Запущена проверка результата.");
+        if (!runValidationPhase(error)) return false;
+        return true;
+    }
+
+    if (requested == "VALIDATION_PASSED") {
+        if (chat.task.state != "VALIDATION" || chat.task.validationReport.empty() ||
+            !chat.task.validationPassed) {
+            inputRejected_ = true;
+            error = "VALIDATION_PASSED разрешён только после успешного результата validation. State was not changed.";
+            return false;
+        }
+        auto next = chat.task;
+        if (!transitionTask(activeChatId_, TaskAction::ValidationPassed,
+                            std::move(next), error)) return false;
+        appendAssistantEvent("Validation passed.\n\nState: DONE.\n\n" +
+                             activeChat().task.validationReport);
+        return true;
+    }
+
+    if (requested == "VALIDATION_FAILED") {
+        if (chat.task.state != "VALIDATION" || chat.task.validationReport.empty() ||
+            chat.task.validationPassed) {
+            inputRejected_ = true;
+            error = "VALIDATION_FAILED разрешён только после неуспешного результата validation. State was not changed.";
+            return false;
+        }
+        auto next = chat.task;
+        next.executionCompleted = false;
+        if (!transitionTask(activeChatId_, TaskAction::ValidationFailed,
+                            std::move(next), error)) return false;
+        appendAssistantEvent("Validation нашёл замечания.\n\nState: EXECUTION. "
+                             "Исправьте задачу сообщением и затем нажмите «Проверить / "
+                             "Перейти к validation».");
+        return true;
     }
 
     if (requested == "REGENERATE_PLAN") {
@@ -1097,7 +1232,7 @@ bool Agent::approveTaskPlan(std::string& error) {
 bool Agent::moveTaskToValidation(std::string& error) {
     clearRequestStatus();
     inputRejected_ = true;
-    error = "Manual transition to VALIDATION is forbidden; EXECUTION_FINISHED is automatic.";
+    error = "Use the EXECUTION_FINISHED button in the Task State panel to confirm the end of EXECUTION.";
     return false;
 }
 
@@ -1105,14 +1240,14 @@ bool Agent::validateTask(bool& passed, std::string& error) {
     passed = false;
     clearRequestStatus();
     inputRejected_ = true;
-    error = "Manual validation transition is forbidden; validation is automatic.";
+    error = "Use the VALIDATION_PASSED or VALIDATION_FAILED button in the Task State panel.";
     return false;
 }
 
 bool Agent::returnTaskToExecution(std::string& error) {
     clearRequestStatus();
     inputRejected_ = true;
-    error = "Manual return to EXECUTION is forbidden; VALIDATION_FAILED is automatic.";
+    error = "Use the VALIDATION_FAILED button in the Task State panel to return to EXECUTION.";
     return false;
 }
 

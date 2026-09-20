@@ -21,6 +21,7 @@ struct ProjectTaskState {
     std::string plan;
     std::string validationReport;
     bool executionCompleted = false;
+    bool validationPassed = false;
 };
 
 struct TaskTransitionLog {
