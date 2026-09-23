@@ -1,5 +1,23 @@
 # C++ Agent Chat
 
+## Day 16 — MCP discovery
+
+MCP добавлен отдельным слоем и не связан с memory, task state machine, invariants, policies или personalization:
+
+```text
+Web UI -> web_server.cpp -> McpClient / libcurl -> Local Python MCP Server
+```
+
+Локальный сервер `mcp_server/server.py` использует официальный Python MCP SDK и публикует `add(a, b)` и `echo(text)`. Он работает отдельным процессом на `http://127.0.0.1:8000/mcp` через Streamable HTTP. C++-клиент выполняет `initialize`, отправляет `notifications/initialized`, затем вызывает `tools/list` и сохраняет `name`, `description`, `inputSchema`. `tools/call` и интеграция с LLM намеренно не реализованы.
+
+Web UI обращается только к C++ backend:
+
+- `POST /api/mcp/connect` — MCP handshake и первоначальный `tools/list`;
+- `POST /api/mcp/disconnect` — завершение MCP-сессии и очистка локального списка;
+- `GET /api/mcp/tools` — обновление списка при активном соединении или чтение текущего disconnected/error state.
+
+В правой колонке существующего интерфейса блок `MCP` показывает статус, имя и адрес сервера, кнопки подключения и список схем аргументов. MCP-server никогда не вызывается напрямую из JavaScript.
+
 ## Day 14 — Project Invariants
 
 `InvariantStore` persists `project_invariants` in its own SQLite file (`project_invariants.db` by default), keyed by the existing project/chat ID. Each row has `key`, `value`, and `description`; it is isolated from short-term history, working memory, long-term memory, personalization, and task state.
@@ -39,6 +57,8 @@ Open this folder in VS Code and press **F5** with the `OpenAI Web Chat (CMake)` 
 flowchart LR
     Browser[HTML / CSS / JavaScript] -->|Local HTTP| Server[web_server.cpp]
     Server --> Agent[Agent]
+    Server --> MCP[McpClient / libcurl]
+    MCP --> LocalMCP[Local Python MCP Server]
     Agent --> RAM[Per-chat raw messages + summary + transcript in RAM]
     Agent --> DB[(SQLite: working memory + project state/summary + shared long-term facts)]
     Agent --> Client[ApiClient / libcurl]
@@ -52,6 +72,8 @@ flowchart LR
 | `main.cpp` | Точка запуска Agent и веб-сервера |
 | `agent.h`, `agent.cpp` | Конфигурация, контекст, input/output policies, память и статистика |
 | `api_client.h`, `api_client.cpp` | OpenAI HTTP API через libcurl и разбор ответа |
+| `mcp_client.h`, `mcp_client.cpp` | MCP handshake, session lifecycle и `tools/list` через libcurl |
+| `mcp_server/server.py` | Отдельный локальный MCP-server на официальном Python SDK |
 | `memory_store.h`, `memory_store.cpp` | SQLite: общие долговременные факты, рабочая память чатов, названия и настройки |
 | `web_server.h`, `web_server.cpp` | Локальные HTTP-маршруты и выдача статических файлов |
 | `index.html`, `styles.css`, `app.js` | Веб-интерфейс |
@@ -212,7 +234,7 @@ CREATE TABLE IF NOT EXISTS long_term_memory (
 - **Секреты:** обнаруженные API-ключи, пароли, токены и приватные ключи приводят к отклонению запроса до обращения к модели. Отклонённый текст не добавляется в историю, summary или SQLite и не должен повторяться в предупреждении или логах.
 - **Опасные команды:** запросы на разрушительное исполнение, например удаление системных файлов или форматирование диска, блокируются эвристически. Обсуждение таких команд само по себе не означает их выполнение.
 
-У Agent **нет tools и механизма запуска команд**. Никакая команда из пользовательского текста или ответа модели не исполняется. Если tools будут добавлены, потребуется отдельная проверка конкретной операции перед её выполнением.
+У Agent **нет LLM tool calling и механизма запуска MCP tools**. Day 16 выполняет только подключение и discovery; никакая команда из пользовательского текста или ответа модели не исполняется. Перед будущим добавлением `tools/call` потребуется отдельная проверка конкретной операции.
 
 Фильтры основаны на эвристиках: это не полноценный DLP-сканер и не доказательство отсутствия секретов или prompt injection. Не вводите реальные секреты в чат; необычные форматы могут не распознаться, а некоторые безопасные примеры могут быть отклонены.
 
@@ -291,10 +313,27 @@ pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-curl mingw-w64-ucrt-x8
 ### Через g++
 
 ```powershell
-g++ -std=c++17 main.cpp agent.cpp api_client.cpp web_server.cpp memory_store.cpp invariant_store.cpp -o main.exe -lcurl -lws2_32 -lsqlite3
+g++ -std=c++17 main.cpp agent.cpp api_client.cpp web_server.cpp memory_store.cpp invariant_store.cpp mcp_client.cpp -o main.exe -lcurl -lws2_32 -lsqlite3
 .\load-env.ps1
 .\main.exe
 ```
+
+### Запуск MCP-server
+
+Один раз создайте отдельное Python 3.11 окружение и установите официальный SDK:
+
+```powershell
+py -3.11 -m venv .venv-mcp
+.\.venv-mcp\Scripts\python.exe -m pip install -r mcp_server\requirements.txt
+```
+
+Запустите MCP-server в первом терминале:
+
+```powershell
+.\.venv-mcp\Scripts\python.exe mcp_server\server.py
+```
+
+Во втором терминале соберите и запустите C++ backend приведёнными выше командами, затем откройте `http://127.0.0.1:8080`, нажмите `Connect` в блоке MCP и увидите `add` и `echo`. По умолчанию C++ подключается к `http://127.0.0.1:8000/mcp`; другой адрес можно задать переменной среды `MCP_SERVER_URL` до запуска backend.
 
 ### Через CMake
 
@@ -316,8 +355,10 @@ cmake --build build
 ```powershell
 g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\agent_tests.cpp agent.cpp memory_store.cpp invariant_store.cpp -o build\agent-tests.exe -lsqlite3
 .\build\agent-tests.exe
-g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\web_parser_tests.cpp agent.cpp api_client.cpp memory_store.cpp invariant_store.cpp -o build\web-parser-tests.exe -lcurl -lws2_32 -lsqlite3
+g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\web_parser_tests.cpp agent.cpp api_client.cpp memory_store.cpp invariant_store.cpp mcp_client.cpp -o build\web-parser-tests.exe -lcurl -lws2_32 -lsqlite3
 .\build\web-parser-tests.exe
+g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\mcp_client_tests.cpp -o build\mcp-client-tests.exe -lcurl -lws2_32
+.\build\mcp-client-tests.exe
 ```
 
 Для нового клона сначала создайте каталог `build` через `New-Item -ItemType Directory -Path build -Force`. При CMake тесты включены по умолчанию: после сборки выполните `ctest --test-dir build --output-on-failure` (для multi-config добавьте `-C Debug`).
@@ -329,6 +370,9 @@ g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\web_parser_tests.cpp agent.cpp 
 | Метод и маршрут | JSON-тело | Действие |
 | --- | --- | --- |
 | `GET /api/state` | — | Состояние выбранного чата и общие настройки/статистика |
+| `POST /api/mcp/connect` | — | MCP handshake и первоначальный `tools/list` |
+| `POST /api/mcp/disconnect` | — | Закрыть MCP-сессию и очистить cached tools |
+| `GET /api/mcp/tools` | — | Обновить или вернуть текущее состояние MCP tools |
 | `POST /api/chats` | `{"name":"Проект C++"}` | Создать именованный чат и выбрать его |
 | `POST /api/chats/select` | `{"chat_id":"1"}` | Выбрать существующий чат |
 | `POST /api/chats/delete` | `{"chat_id":"1"}` | Удалить чат, его рабочую память и RAM-историю; общая long-term memory сохраняется |

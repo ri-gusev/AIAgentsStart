@@ -1,4 +1,5 @@
 #include "agent.h"
+#include "mcp_client.h"
 #include "web_server.h"
 
 #include <iostream>
@@ -18,5 +19,6 @@ int main() {
         std::cerr << agent.initializationError() << '\n';
         return 1;
     }
-    return runWebServer(agent);
+    McpClient mcpClient;
+    return runWebServer(agent, mcpClient);
 }

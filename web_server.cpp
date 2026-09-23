@@ -1,6 +1,7 @@
 #include "web_server.h"
 
 #include "agent.h"
+#include "mcp_client.h"
 
 #include <cctype>
 #include <atomic>
@@ -260,6 +261,25 @@ std::string buildAgentStateFields(const Agent& agent) {
         ",\"cost_usd\":{\"total\":" + usd(cost.summaryUsd) + "}}}";
 }
 
+std::string buildMcpStateJson(const McpClient& mcpClient) {
+    std::string toolsJson = "[";
+    bool first = true;
+    for (const auto& tool : mcpClient.tools()) {
+        if (!first) toolsJson += ',';
+        first = false;
+        toolsJson += "{\"name\":\"" + jsonEscape(tool.name) +
+                     "\",\"description\":\"" + jsonEscape(tool.description) +
+                     "\",\"inputSchema\":" +
+                     (tool.inputSchemaJson.empty() ? "{}" : tool.inputSchemaJson) + "}";
+    }
+    toolsJson += ']';
+    return "{\"status\":\"" + jsonEscape(mcpClient.status()) +
+           "\",\"server\":{\"name\":\"" + jsonEscape(mcpClient.serverName()) +
+           "\",\"url\":\"" + jsonEscape(mcpClient.serverUrl()) +
+           "\"},\"tools\":" + toolsJson +
+           ",\"error\":\"" + jsonEscape(mcpClient.lastError()) + "\"}";
+}
+
 bool parseContentLength(const std::string& text, size_t& value) {
     size_t position = 0;
     while (position < text.size() &&
@@ -335,7 +355,8 @@ std::string readFile(const std::string& path) {
 }
 
 void sendHttpResponse(SOCKET client, int status, const std::string& contentType, const std::string& body) {
-    const std::string statusText = status == 200 ? "OK" : status == 400 ? "Bad Request" : status == 404 ? "Not Found" : "Internal Server Error";
+    const std::string statusText = status == 200 ? "OK" : status == 400 ? "Bad Request" :
+        status == 404 ? "Not Found" : status == 502 ? "Bad Gateway" : "Internal Server Error";
     sendAll(client, "HTTP/1.1 " + std::to_string(status) + " " + statusText + "\r\n"
             "Content-Type: " + contentType + "; charset=utf-8\r\n"
             "Content-Length: " + std::to_string(body.size()) + "\r\n"
@@ -344,7 +365,7 @@ void sendHttpResponse(SOCKET client, int status, const std::string& contentType,
 #endif
 }
 
-int runWebServer(Agent& agent) {
+int runWebServer(Agent& agent, McpClient& mcpClient) {
 #ifndef _WIN32
     std::cerr << "Web mode is currently available on Windows only\n";
     return 1;
@@ -381,6 +402,21 @@ int runWebServer(Agent& agent) {
         HttpRequest request;
         if (!readHttpRequest(client, request)) {
             sendHttpResponse(client, 400, "application/json", "{\"error\":\"Invalid request\"}");
+        } else if (request.method == "POST" && request.path == "/api/mcp/connect") {
+            std::string error;
+            const bool success = mcpClient.connect(error);
+            sendHttpResponse(client, success ? 200 : 502, "application/json",
+                             buildMcpStateJson(mcpClient));
+        } else if (request.method == "POST" && request.path == "/api/mcp/disconnect") {
+            std::string error;
+            mcpClient.disconnect(error);
+            sendHttpResponse(client, 200, "application/json", buildMcpStateJson(mcpClient));
+        } else if (request.method == "GET" && request.path == "/api/mcp/tools") {
+            bool success = true;
+            std::string error;
+            if (mcpClient.status() == "Connected") success = mcpClient.refreshTools(error);
+            sendHttpResponse(client, success ? 200 : 502, "application/json",
+                             buildMcpStateJson(mcpClient));
         } else if (request.method == "POST" && request.path == "/api/chat") {
             std::string prompt, chatId;
             bool chatIdPresent = false;

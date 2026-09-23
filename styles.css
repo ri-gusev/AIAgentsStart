@@ -142,6 +142,26 @@ textarea::placeholder, input::placeholder { color: #929ab3; }
 .personalization-panel textarea { max-height: 180px; min-height: 100px; margin: 6px 0 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px; background: white; resize: vertical; }
 .personalization-panel textarea:focus { border-color: var(--green); box-shadow: 0 0 0 2px rgba(68,87,196,.1); }
 .personalization-panel button { width: 100%; }
+.mcp-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mcp-heading h3 { margin-bottom: 0; }
+.mcp-status { flex-shrink: 0; padding: 4px 7px; border-radius: 999px; color: #596078; background: #e5e8f2; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.mcp-status[data-status="connected"] { color: #0b5f58; background: #d9f3ef; }
+.mcp-status[data-status="error"] { color: #9f241b; background: #fee4e2; }
+.mcp-server-details { margin: 12px 0; display: grid; gap: 8px; }
+.mcp-server-details dt, .mcp-tools-heading { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.mcp-server-details dd { margin: 2px 0 0; font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }
+.mcp-server-details code { color: var(--green); font: 10px/1.4 Consolas, monospace; }
+.mcp-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.mcp-actions button { min-width: 0; padding: 8px 6px; font-size: 10px; }
+.mcp-actions button:last-child { grid-column: 1 / -1; }
+.mcp-error { margin: 9px 0 0 !important; padding: 8px; border: 1px solid #efb4ae; border-radius: 9px; color: #9f241b !important; background: #fff8f7; overflow-wrap: anywhere; }
+.mcp-error[hidden] { display: none; }
+.mcp-tools-heading { margin-top: 12px; }
+.mcp-tools { margin-top: 7px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.mcp-tool { padding: 8px; border: 1px solid #c6cdeb; border-radius: 10px; background: rgba(255,255,255,.78); }
+.mcp-tool + .mcp-tool { margin-top: 7px; }
+.mcp-tool strong { display: block; color: var(--green); font: 700 11px/1.4 Consolas, monospace; overflow-wrap: anywhere; }
+.mcp-tool p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
 .memory-stats { margin: 0; display: grid; gap: 9px; }
 .memory-stats dt { color: var(--muted); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
 .memory-stats dd { margin: 3px 0 0; color: var(--ink); font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }

@@ -43,6 +43,14 @@ const taskStateSteps = Array.from(document.querySelectorAll('.task-state-step'))
 const taskStateActions = document.querySelector('#taskStateActions');
 const workspace = document.querySelector('.workspace');
 const chatSidebarToggle = document.querySelector('#chatSidebarToggle');
+const mcpStatus = document.querySelector('#mcpStatus');
+const mcpServerName = document.querySelector('#mcpServerName');
+const mcpServerUrl = document.querySelector('#mcpServerUrl');
+const mcpConnectButton = document.querySelector('#mcpConnectButton');
+const mcpDisconnectButton = document.querySelector('#mcpDisconnectButton');
+const mcpRefreshButton = document.querySelector('#mcpRefreshButton');
+const mcpError = document.querySelector('#mcpError');
+const mcpTools = document.querySelector('#mcpTools');
 
 const TASK_PHASES = ['PLANNING', 'EXECUTION', 'VALIDATION', 'DONE'];
 const TASK_STATES = [...TASK_PHASES, 'PAUSED'];
@@ -58,6 +66,77 @@ let currentTask = {
   validation_report: '', execution_completed: false, validation_passed: false
 };
 let editingInvariantKey = '';
+let mcpPending = false;
+let currentMcpStatus = 'Disconnected';
+
+function mcpArgumentSummary(schema) {
+  const properties = schema && typeof schema === 'object' && schema.properties &&
+    typeof schema.properties === 'object' ? schema.properties : {};
+  const required = new Set(Array.isArray(schema?.required) ? schema.required : []);
+  const argumentsList = Object.entries(properties).map(([name, definition]) => {
+    const type = definition && typeof definition.type === 'string' ? definition.type : 'value';
+    return name + (required.has(name) ? '' : '?') + ': ' + type;
+  });
+  return '(' + argumentsList.join(', ') + ')';
+}
+
+function updateMcpControls() {
+  const connected = currentMcpStatus === 'Connected';
+  mcpConnectButton.disabled = mcpPending || connected;
+  mcpDisconnectButton.disabled = mcpPending || currentMcpStatus === 'Disconnected';
+  mcpRefreshButton.disabled = mcpPending || !connected;
+}
+
+function renderMcpState(data = {}) {
+  currentMcpStatus = ['Connected', 'Disconnected', 'Error'].includes(data.status)
+    ? data.status : 'Error';
+  mcpStatus.textContent = currentMcpStatus;
+  mcpStatus.dataset.status = currentMcpStatus.toLowerCase();
+  mcpServerName.textContent = typeof data.server?.name === 'string'
+    ? data.server.name : 'Local Tools Server';
+  mcpServerUrl.textContent = typeof data.server?.url === 'string' ? data.server.url : '';
+  const error = typeof data.error === 'string' ? data.error : '';
+  mcpError.textContent = error;
+  mcpError.hidden = !error;
+  mcpTools.replaceChildren();
+  if (!Array.isArray(data.tools) || !data.tools.length) {
+    mcpTools.textContent = currentMcpStatus === 'Connected'
+      ? 'No tools published.' : 'Connect to discover tools.';
+  } else {
+    data.tools.forEach((tool) => {
+      const item = document.createElement('article');
+      item.className = 'mcp-tool';
+      const signature = document.createElement('strong');
+      signature.textContent = String(tool.name || '') + mcpArgumentSummary(tool.inputSchema);
+      const description = document.createElement('p');
+      description.textContent = typeof tool.description === 'string' ? tool.description : '';
+      item.append(signature, description);
+      mcpTools.append(item);
+    });
+  }
+  updateMcpControls();
+}
+
+async function requestMcp(path, method = 'GET') {
+  if (mcpPending) return;
+  mcpPending = true;
+  updateMcpControls();
+  try {
+    const response = await fetch(path, { method, cache: 'no-store' });
+    const data = await response.json();
+    renderMcpState(data);
+  } catch {
+    renderMcpState({
+      status: 'Error',
+      server: { name: mcpServerName.textContent, url: mcpServerUrl.textContent },
+      tools: [],
+      error: 'C++ backend is unavailable.'
+    });
+  } finally {
+    mcpPending = false;
+    updateMcpControls();
+  }
+}
 
 function resetInvariantForm() {
   editingInvariantKey = '';
@@ -592,8 +671,12 @@ cancelInvariantEditButton.addEventListener('click', resetInvariantForm);
 chatSidebarToggle.addEventListener('click', () => {
   setChatSidebarCollapsed(!workspace.classList.contains('chats-collapsed'));
 });
+mcpConnectButton.addEventListener('click', () => requestMcp('/api/mcp/connect', 'POST'));
+mcpDisconnectButton.addEventListener('click', () => requestMcp('/api/mcp/disconnect', 'POST'));
+mcpRefreshButton.addEventListener('click', () => requestMcp('/api/mcp/tools'));
 
 loadAgentState();
+requestMcp('/api/mcp/tools');
 // Do not refresh on window focus: the refresh marks the UI busy and can swallow
 // the first click on actions such as project deletion. Every mutation already
 // returns the complete current Agent state.

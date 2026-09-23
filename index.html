@@ -116,6 +116,25 @@
           </form>
         </section>
 
+        <section class="side-card mcp-panel" aria-labelledby="mcpTitle">
+          <div class="mcp-heading">
+            <h3 id="mcpTitle">MCP</h3>
+            <span id="mcpStatus" class="mcp-status" data-status="disconnected" aria-live="polite">Disconnected</span>
+          </div>
+          <dl class="mcp-server-details">
+            <div><dt>Server</dt><dd id="mcpServerName">Local Tools Server</dd></div>
+            <div><dt>Address</dt><dd><code id="mcpServerUrl">http://127.0.0.1:8000/mcp</code></dd></div>
+          </dl>
+          <div class="mcp-actions">
+            <button id="mcpConnectButton" class="secondary-button" type="button">Connect</button>
+            <button id="mcpDisconnectButton" class="secondary-button" type="button" disabled>Disconnect</button>
+            <button id="mcpRefreshButton" class="secondary-button" type="button" disabled>Refresh tools</button>
+          </div>
+          <p id="mcpError" class="mcp-error" role="status" hidden></p>
+          <div class="mcp-tools-heading">Tools</div>
+          <div id="mcpTools" class="mcp-tools" aria-live="polite">Connect to discover tools.</div>
+        </section>
+
         <section class="side-card memory-panel" aria-label="Память и стоимость">
           <h3>Память и токены</h3>
           <dl class="memory-stats" aria-live="polite">
