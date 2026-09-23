@@ -1,5 +1,11 @@
 .env
 build/
+.venv/
+.venv-*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
 agent_config.local.json
 agent_memory.db
 agent_memory.db-shm
