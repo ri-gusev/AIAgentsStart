@@ -31,6 +31,16 @@ int main() {
         require(!parseMcpResponse(R"({"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"No method"}})",
                                   errorRoot, error) && error.find("No method") != std::string::npos,
                 "surface MCP error");
+
+        McpClient client("http://127.0.0.1:1/mcp");
+        std::string toolResult;
+        require(!client.callTool("add", R"({"a":1,"b":2})", toolResult, error),
+                "reject tool call while disconnected");
+        require(error.find("not connected") != std::string::npos,
+                "describe disconnected tool call");
+        require(client.calls().size() == 1 && !client.calls().front().success &&
+                client.calls().front().argumentsJson == R"({"a":1,"b":2})",
+                "record manually requested tool call status and arguments");
         std::cout << "MCP response parser tests passed (no network requests)\n";
         return 0;
     } catch (const std::exception& error) {

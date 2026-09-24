@@ -157,11 +157,26 @@ textarea::placeholder, input::placeholder { color: #929ab3; }
 .mcp-error { margin: 9px 0 0 !important; padding: 8px; border: 1px solid #efb4ae; border-radius: 9px; color: #9f241b !important; background: #fff8f7; overflow-wrap: anywhere; }
 .mcp-error[hidden] { display: none; }
 .mcp-tools-heading { margin-top: 12px; }
+.mcp-tools-toggle { width: 100%; margin-top: 12px; padding: 8px 10px; text-align: left; color: var(--ink); background: rgba(255,255,255,.72); border: 1px solid #c6cdeb; border-radius: 9px; font-size: 11px; font-weight: 700; cursor: pointer; }
 .mcp-tools { margin-top: 7px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .mcp-tool { padding: 8px; border: 1px solid #c6cdeb; border-radius: 10px; background: rgba(255,255,255,.78); }
 .mcp-tool + .mcp-tool { margin-top: 7px; }
-.mcp-tool strong { display: block; color: var(--green); font: 700 11px/1.4 Consolas, monospace; overflow-wrap: anywhere; }
-.mcp-tool p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+.mcp-tool summary { cursor: pointer; }
+.mcp-tool summary strong { color: var(--green); font: 700 11px/1.4 Consolas, monospace; overflow-wrap: anywhere; }
+.mcp-tool p { margin: 5px 0 8px; }
+.mcp-tool-form { display: grid; gap: 8px; }
+.mcp-argument-field { display: grid; gap: 4px; color: var(--muted); font-size: 10px; }
+.mcp-argument-field input, .mcp-argument-field select, .mcp-argument-field textarea { width: 100%; padding: 7px; color: var(--ink); border: 1px solid #c6cdeb; border-radius: 7px; background: #fff; font: 11px/1.4 Consolas, monospace; }
+.mcp-argument-field input[type="checkbox"] { width: auto; justify-self: start; }
+.mcp-argument-field textarea { min-height: 56px; resize: vertical; }
+.mcp-call { padding: 8px; border: 1px solid #c6cdeb; border-radius: 10px; background: rgba(255,255,255,.78); }
+.mcp-call + .mcp-call { margin-top: 7px; }
+.mcp-call-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mcp-call-header strong { color: var(--green); font: 700 11px/1.4 Consolas, monospace; overflow-wrap: anywhere; }
+.mcp-call-status { flex-shrink: 0; color: #0b5f58; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.mcp-call-status.error { color: #9f241b; }
+.mcp-call pre { margin: 5px 0 0; color: var(--muted); font: 10px/1.4 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mcp-call-error { margin: 5px 0 0 !important; color: #9f241b !important; font-size: 10px !important; overflow-wrap: anywhere; }
 .memory-stats { margin: 0; display: grid; gap: 9px; }
 .memory-stats dt { color: var(--muted); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
 .memory-stats dd { margin: 3px 0 0; color: var(--ink); font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }

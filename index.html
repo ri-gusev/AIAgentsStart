@@ -131,8 +131,10 @@
             <button id="mcpRefreshButton" class="secondary-button" type="button" disabled>Refresh tools</button>
           </div>
           <p id="mcpError" class="mcp-error" role="status" hidden></p>
-          <div class="mcp-tools-heading">Tools</div>
-          <div id="mcpTools" class="mcp-tools" aria-live="polite">Connect to discover tools.</div>
+          <button id="mcpToolsToggle" class="mcp-tools-toggle" type="button" aria-expanded="false">Available tools</button>
+          <div id="mcpTools" class="mcp-tools" aria-live="polite" hidden>Connect to discover tools.</div>
+          <div class="mcp-tools-heading">Recent calls</div>
+          <div id="mcpCallLog" class="mcp-call-log" aria-live="polite">No tool calls yet.</div>
         </section>
 
         <section class="side-card memory-panel" aria-label="Память и стоимость">

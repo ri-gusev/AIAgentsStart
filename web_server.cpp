@@ -261,7 +261,8 @@ std::string buildAgentStateFields(const Agent& agent) {
         ",\"cost_usd\":{\"total\":" + usd(cost.summaryUsd) + "}}}";
 }
 
-std::string buildMcpStateJson(const McpClient& mcpClient) {
+std::string buildMcpStateJson(const McpClient& mcpClient,
+                              const std::string& requestError = {}) {
     std::string toolsJson = "[";
     bool first = true;
     for (const auto& tool : mcpClient.tools()) {
@@ -273,11 +274,24 @@ std::string buildMcpStateJson(const McpClient& mcpClient) {
                      (tool.inputSchemaJson.empty() ? "{}" : tool.inputSchemaJson) + "}";
     }
     toolsJson += ']';
+    std::string callsJson = "[";
+    first = true;
+    for (const auto& call : mcpClient.calls()) {
+        if (!first) callsJson += ',';
+        first = false;
+        callsJson += "{\"name\":\"" + jsonEscape(call.name) +
+            "\",\"arguments\":\"" + jsonEscape(call.argumentsJson) +
+            "\",\"success\":" + std::string(call.success ? "true" : "false") +
+            ",\"result\":" + (call.resultJson.empty() ? "null" : call.resultJson) +
+            ",\"error\":\"" + jsonEscape(call.error) + "\"}";
+    }
+    callsJson += ']';
     return "{\"status\":\"" + jsonEscape(mcpClient.status()) +
            "\",\"server\":{\"name\":\"" + jsonEscape(mcpClient.serverName()) +
            "\",\"url\":\"" + jsonEscape(mcpClient.serverUrl()) +
-           "\"},\"tools\":" + toolsJson +
-           ",\"error\":\"" + jsonEscape(mcpClient.lastError()) + "\"}";
+           "\"},\"tools\":" + toolsJson + ",\"calls\":" + callsJson +
+           ",\"error\":\"" + jsonEscape(requestError.empty()
+                ? mcpClient.lastError() : requestError) + "\"}";
 }
 
 bool parseContentLength(const std::string& text, size_t& value) {
@@ -417,6 +431,17 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
             if (mcpClient.status() == "Connected") success = mcpClient.refreshTools(error);
             sendHttpResponse(client, success ? 200 : 502, "application/json",
                              buildMcpStateJson(mcpClient));
+        } else if (request.method == "POST" && request.path == "/api/mcp/call") {
+            std::string name, arguments, error, result;
+            if (!extractJsonStringField(request.body, "name", name) || name.empty() ||
+                !extractJsonStringField(request.body, "arguments", arguments) || arguments.empty()) {
+                sendHttpResponse(client, 400, "application/json",
+                    buildMcpStateJson(mcpClient,
+                        "Tool name and JSON arguments are required"));
+            } else {
+                mcpClient.callTool(name, arguments, result, error);
+                sendHttpResponse(client, 200, "application/json", buildMcpStateJson(mcpClient));
+            }
         } else if (request.method == "POST" && request.path == "/api/chat") {
             std::string prompt, chatId;
             bool chatIdPresent = false;

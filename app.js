@@ -51,6 +51,8 @@ const mcpDisconnectButton = document.querySelector('#mcpDisconnectButton');
 const mcpRefreshButton = document.querySelector('#mcpRefreshButton');
 const mcpError = document.querySelector('#mcpError');
 const mcpTools = document.querySelector('#mcpTools');
+const mcpToolsToggle = document.querySelector('#mcpToolsToggle');
+const mcpCallLog = document.querySelector('#mcpCallLog');
 
 const TASK_PHASES = ['PLANNING', 'EXECUTION', 'VALIDATION', 'DONE'];
 const TASK_STATES = [...TASK_PHASES, 'PAUSED'];
@@ -87,6 +89,43 @@ function updateMcpControls() {
   mcpRefreshButton.disabled = mcpPending || !connected;
 }
 
+function makeToolArgumentField(name, definition, required) {
+  const label = document.createElement('label');
+  label.className = 'mcp-argument-field';
+  const caption = document.createElement('span');
+  caption.textContent = name + (required ? '' : ' (optional)');
+  label.append(caption);
+  const type = typeof definition?.type === 'string' ? definition.type : 'string';
+  let control;
+  if (Array.isArray(definition?.enum)) {
+    control = document.createElement('select');
+    definition.enum.forEach((choice) => {
+      const option = document.createElement('option');
+      option.value = String(choice);
+      option.textContent = String(choice);
+      control.append(option);
+    });
+  } else if (type === 'boolean') {
+    control = document.createElement('input');
+    control.type = 'checkbox';
+  } else if (type === 'object' || type === 'array') {
+    control = document.createElement('textarea');
+    control.placeholder = type === 'array' ? '[]' : '{}';
+  } else {
+    control = document.createElement('input');
+    control.type = type === 'integer' || type === 'number' ? 'number' : 'text';
+    if (type === 'integer') control.step = '1';
+    if (type === 'number') control.step = 'any';
+  }
+  control.name = name;
+  control.dataset.type = type;
+  control.required = required;
+  if (definition?.minimum !== undefined && control.type === 'number') control.min = definition.minimum;
+  if (definition?.maximum !== undefined && control.type === 'number') control.max = definition.maximum;
+  label.append(control);
+  return label;
+}
+
 function renderMcpState(data = {}) {
   currentMcpStatus = ['Connected', 'Disconnected', 'Error'].includes(data.status)
     ? data.status : 'Error';
@@ -98,23 +137,114 @@ function renderMcpState(data = {}) {
   const error = typeof data.error === 'string' ? data.error : '';
   mcpError.textContent = error;
   mcpError.hidden = !error;
+  mcpToolsToggle.textContent = 'Available tools (' + (Array.isArray(data.tools) ? data.tools.length : 0) + ')';
   mcpTools.replaceChildren();
   if (!Array.isArray(data.tools) || !data.tools.length) {
     mcpTools.textContent = currentMcpStatus === 'Connected'
       ? 'No tools published.' : 'Connect to discover tools.';
   } else {
     data.tools.forEach((tool) => {
-      const item = document.createElement('article');
+      const item = document.createElement('details');
       item.className = 'mcp-tool';
+      const summary = document.createElement('summary');
       const signature = document.createElement('strong');
       signature.textContent = String(tool.name || '') + mcpArgumentSummary(tool.inputSchema);
       const description = document.createElement('p');
       description.textContent = typeof tool.description === 'string' ? tool.description : '';
-      item.append(signature, description);
+      summary.append(signature);
+      item.append(summary, description);
+      const form = document.createElement('form');
+      form.className = 'mcp-tool-form';
+      const schema = tool.inputSchema && typeof tool.inputSchema === 'object' ? tool.inputSchema : {};
+      const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
+      const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+      Object.entries(properties).forEach(([name, definition]) => {
+        form.append(makeToolArgumentField(name, definition, required.has(name)));
+      });
+      const run = document.createElement('button');
+      run.type = 'submit';
+      run.className = 'secondary-button';
+      run.textContent = 'Run tool';
+      form.append(run);
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const args = {};
+        for (const control of form.elements) {
+          if (!control.name) continue;
+          if (control.type === 'checkbox') args[control.name] = control.checked;
+          else if (control.dataset.type === 'object' || control.dataset.type === 'array') {
+            try { args[control.name] = JSON.parse(control.value || (control.dataset.type === 'array' ? '[]' : '{}')); }
+            catch { mcpError.textContent = 'Invalid JSON for ' + control.name; mcpError.hidden = false; return; }
+          } else if (control.type === 'number' && control.value === '' && !control.required) {
+            continue;
+          } else if (control.type === 'number') {
+            args[control.name] = control.dataset.type === 'integer' ? Number.parseInt(control.value, 10) : Number(control.value);
+          } else if (control.value !== '') args[control.name] = control.value;
+        }
+        runMcpTool(String(tool.name), args, run);
+      });
+      item.append(form);
       mcpTools.append(item);
     });
   }
+  renderMcpCalls(data.calls);
   updateMcpControls();
+}
+
+function renderMcpCalls(calls) {
+  mcpCallLog.replaceChildren();
+  if (!Array.isArray(calls) || calls.length === 0) {
+    mcpCallLog.textContent = 'No tool calls yet.';
+    return;
+  }
+  calls.forEach((call) => {
+    const item = document.createElement('article');
+    item.className = 'mcp-call';
+    const header = document.createElement('div');
+    header.className = 'mcp-call-header';
+    const name = document.createElement('strong');
+    name.textContent = String(call.name || 'Unknown tool');
+    const status = document.createElement('span');
+    status.className = 'mcp-call-status' + (call.success === true ? '' : ' error');
+    status.textContent = call.success === true ? 'Success' : 'Error';
+    header.append(name, status);
+    const args = document.createElement('pre');
+    args.textContent = typeof call.arguments === 'string' ? call.arguments : '{}';
+    item.append(header, args);
+    if (call.result !== null && call.result !== undefined) {
+      const result = document.createElement('pre');
+      result.textContent = JSON.stringify(call.result, null, 2);
+      item.append(result);
+    }
+    if (call.success !== true && typeof call.error === 'string' && call.error) {
+      const error = document.createElement('p');
+      error.className = 'mcp-call-error';
+      error.textContent = call.error;
+      item.append(error);
+    }
+    mcpCallLog.append(item);
+  });
+}
+
+async function runMcpTool(name, args, button) {
+  if (mcpPending) return;
+  mcpPending = true;
+  button.disabled = true;
+  updateMcpControls();
+  mcpTools.querySelectorAll('button[type="submit"]').forEach((runButton) => { runButton.disabled = true; });
+  try {
+    const response = await fetch('/api/mcp/call', {
+      method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, arguments: JSON.stringify(args) })
+    });
+    renderMcpState(await response.json());
+  } catch {
+    mcpError.textContent = 'C++ backend is unavailable.';
+    mcpError.hidden = false;
+  } finally {
+    mcpPending = false;
+    updateMcpControls();
+  }
 }
 
 async function requestMcp(path, method = 'GET') {
@@ -670,6 +800,11 @@ invariantForm.addEventListener('submit', async (event) => {
 cancelInvariantEditButton.addEventListener('click', resetInvariantForm);
 chatSidebarToggle.addEventListener('click', () => {
   setChatSidebarCollapsed(!workspace.classList.contains('chats-collapsed'));
+});
+mcpToolsToggle.addEventListener('click', () => {
+  const expanded = mcpToolsToggle.getAttribute('aria-expanded') === 'true';
+  mcpToolsToggle.setAttribute('aria-expanded', String(!expanded));
+  mcpTools.hidden = expanded;
 });
 mcpConnectButton.addEventListener('click', () => requestMcp('/api/mcp/connect', 'POST'));
 mcpDisconnectButton.addEventListener('click', () => requestMcp('/api/mcp/disconnect', 'POST'));

@@ -2,6 +2,7 @@
 
 #include <curl/curl.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <map>
@@ -425,7 +426,7 @@ bool McpClient::connect(std::string& error) {
     const std::string request =
         "{\"jsonrpc\":\"2.0\",\"id\":" + std::to_string(nextRequestId_++) +
         ",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"," 
-        "\"capabilities\":{},\"clientInfo\":{\"name\":\"AI Agent Course\",\"version\":\"Day 16\"}}}";
+        "\"capabilities\":{},\"clientInfo\":{\"name\":\"AI Agent Course\",\"version\":\"Day 17\"}}}";
     if (!postJson(request, false, response, error)) {
         setError(error);
         return false;
@@ -525,6 +526,81 @@ bool McpClient::refreshTools(std::string& error) {
     return true;
 }
 
+bool McpClient::callTool(const std::string& name, const std::string& argumentsJson,
+                        std::string& resultJson, std::string& error) {
+    resultJson.clear();
+    error.clear();
+    McpToolCallRecord record;
+    record.name = name;
+    record.argumentsJson = argumentsJson;
+    const auto finish = [this, &record, &resultJson, &error](bool success) {
+        record.success = success;
+        record.resultJson = resultJson;
+        record.error = error;
+        calls_.push_back(std::move(record));
+        if (calls_.size() > 20) calls_.erase(calls_.begin());
+        return success;
+    };
+    if (status_ != "Connected" || sessionId_.empty()) {
+        error = "MCP server is not connected";
+        return finish(false);
+    }
+    const auto tool = std::find_if(tools_.begin(), tools_.end(), [&name](const McpTool& item) {
+        return item.name == name;
+    });
+    if (tool == tools_.end()) {
+        error = "Tool is not available from the connected MCP server";
+        return finish(false);
+    }
+    JsonValue arguments;
+    if (!JsonParser(argumentsJson).parse(arguments, error) ||
+        arguments.type != JsonValue::Type::Object) {
+        error = "Tool arguments must be a valid JSON object";
+        return finish(false);
+    }
+
+    const unsigned long long requestId = nextRequestId_++;
+    HttpResponse response;
+    const std::string request =
+        "{\"jsonrpc\":\"2.0\",\"id\":" + std::to_string(requestId) +
+        ",\"method\":\"tools/call\",\"params\":{\"name\":\"" + jsonEscape(name) +
+        "\",\"arguments\":" + serializeJson(arguments) + "}}";
+    if (!postJson(request, true, response, error)) {
+        setError(error);
+        return finish(false);
+    }
+    JsonValue root;
+    if (!parseMcpResponse(response.body, root, error)) {
+        setError(error);
+        return finish(false);
+    }
+    const JsonValue* result = root.member("result");
+    if (!result || result->type != JsonValue::Type::Object) {
+        error = "MCP tools/call response has no result object";
+        setError(error);
+        return finish(false);
+    }
+    const JsonValue* isError = result->member("isError");
+    if (isError && isError->type == JsonValue::Type::Boolean && isError->boolean) {
+        error = "MCP tool returned an error";
+        const JsonValue* content = result->member("content");
+        if (content && content->type == JsonValue::Type::Array) {
+            for (const auto& item : content->array) {
+                const JsonValue* text = item.member("text");
+                if (text && text->type == JsonValue::Type::String && !text->text.empty()) {
+                    error = text->text;
+                    break;
+                }
+            }
+        }
+        resultJson = "{\"isError\":true,\"error\":\"" + jsonEscape(error) + "\"}";
+        return finish(false);
+    }
+    const JsonValue* structured = result->member("structuredContent");
+    resultJson = structured ? serializeJson(*structured) : serializeJson(*result);
+    return finish(true);
+}
+
 bool McpClient::disconnect(std::string& error) {
     error.clear();
     if (!sessionId_.empty()) {
@@ -549,6 +625,7 @@ bool McpClient::disconnect(std::string& error) {
     }
     sessionId_.clear();
     tools_.clear();
+    calls_.clear();
     status_ = "Disconnected";
     lastError_.clear();
     return true;
@@ -565,3 +642,4 @@ const std::string& McpClient::serverName() const { return serverName_; }
 const std::string& McpClient::serverUrl() const { return serverUrl_; }
 const std::string& McpClient::lastError() const { return lastError_; }
 const std::vector<McpTool>& McpClient::tools() const { return tools_; }
+const std::vector<McpToolCallRecord>& McpClient::calls() const { return calls_; }

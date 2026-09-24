@@ -1,6 +1,6 @@
 # C++ Agent Chat
 
-## Day 16 — MCP discovery
+## Day 17 — MCP: ручной запуск tools
 
 MCP добавлен отдельным слоем и не связан с memory, task state machine, invariants, policies или personalization:
 
@@ -8,15 +8,16 @@ MCP добавлен отдельным слоем и не связан с memor
 Web UI -> web_server.cpp -> McpClient / libcurl -> Local Python MCP Server
 ```
 
-Локальный сервер `mcp_server/server.py` использует официальный Python MCP SDK и публикует `add(a, b)` и `echo(text)`. Он работает отдельным процессом на `http://127.0.0.1:8000/mcp` через Streamable HTTP. C++-клиент выполняет `initialize`, отправляет `notifications/initialized`, затем вызывает `tools/list` и сохраняет `name`, `description`, `inputSchema`. `tools/call` и интеграция с LLM намеренно не реализованы.
+Локальный сервер `mcp_server/server.py` использует официальный Python MCP SDK и публикует `add(a, b)`, `echo(text)` и `get_todo(id)`. Последний получает задачу из публичного JSONPlaceholder REST API и возвращает `id`, `title`, `completed`. Сервер работает отдельным процессом на `http://127.0.0.1:8000/mcp` через Streamable HTTP. C++-клиент выполняет `initialize`, отправляет `notifications/initialized`, вызывает `tools/list` и сохраняет `name`, `description`, `inputSchema`.
 
 Web UI обращается только к C++ backend:
 
 - `POST /api/mcp/connect` — MCP handshake и первоначальный `tools/list`;
 - `POST /api/mcp/disconnect` — завершение MCP-сессии и очистка локального списка;
 - `GET /api/mcp/tools` — обновление списка при активном соединении или чтение текущего disconnected/error state.
+- `POST /api/mcp/call` — ручной вызов выбранного инструмента; тело содержит `name` и JSON arguments.
 
-В правой колонке существующего интерфейса блок `MCP` показывает статус, имя и адрес сервера, кнопки подключения и список схем аргументов. MCP-server никогда не вызывается напрямую из JavaScript.
+В правой колонке существующего интерфейса блок `MCP` показывает статус, имя и адрес сервера, кнопки подключения и раскрываемый список tools. Раскрытие конкретного tool показывает форму по его `inputSchema`; кнопка `Run tool` отправляет вызов через backend. MCP-server никогда не вызывается напрямую из JavaScript.
 
 ## Day 14 — Project Invariants
 
@@ -72,7 +73,7 @@ flowchart LR
 | `main.cpp` | Точка запуска Agent и веб-сервера |
 | `agent.h`, `agent.cpp` | Конфигурация, контекст, input/output policies, память и статистика |
 | `api_client.h`, `api_client.cpp` | OpenAI HTTP API через libcurl и разбор ответа |
-| `mcp_client.h`, `mcp_client.cpp` | MCP handshake, session lifecycle и `tools/list` через libcurl |
+| `mcp_client.h`, `mcp_client.cpp` | MCP handshake, `tools/list` и ручной `tools/call` через libcurl |
 | `mcp_server/server.py` | Отдельный локальный MCP-server на официальном Python SDK |
 | `memory_store.h`, `memory_store.cpp` | SQLite: общие долговременные факты, рабочая память чатов, названия и настройки |
 | `web_server.h`, `web_server.cpp` | Локальные HTTP-маршруты и выдача статических файлов |
@@ -234,7 +235,7 @@ CREATE TABLE IF NOT EXISTS long_term_memory (
 - **Секреты:** обнаруженные API-ключи, пароли, токены и приватные ключи приводят к отклонению запроса до обращения к модели. Отклонённый текст не добавляется в историю, summary или SQLite и не должен повторяться в предупреждении или логах.
 - **Опасные команды:** запросы на разрушительное исполнение, например удаление системных файлов или форматирование диска, блокируются эвристически. Обсуждение таких команд само по себе не означает их выполнение.
 
-У Agent **нет LLM tool calling и механизма запуска MCP tools**. Day 16 выполняет только подключение и discovery; никакая команда из пользовательского текста или ответа модели не исполняется. Перед будущим добавлением `tools/call` потребуется отдельная проверка конкретной операции.
+Инструменты не передаются модели: LLM не может выбирать или запускать MCP tools. Пользователь раскрывает список в панели MCP, раскрывает нужный инструмент, вводит аргументы и явно нажимает `Run tool`. Backend вызывает `McpClient::callTool`, который отправляет MCP `tools/call`; результат, аргументы и success/error отображаются в истории ручных вызовов. Вызов tool не изменяет чат, память или task state.
 
 Фильтры основаны на эвристиках: это не полноценный DLP-сканер и не доказательство отсутствия секретов или prompt injection. Не вводите реальные секреты в чат; необычные форматы могут не распознаться, а некоторые безопасные примеры могут быть отклонены.
 
@@ -333,7 +334,7 @@ py -3.11 -m venv .venv-mcp
 .\.venv-mcp\Scripts\python.exe mcp_server\server.py
 ```
 
-Во втором терминале соберите и запустите C++ backend приведёнными выше командами, затем откройте `http://127.0.0.1:8080`, нажмите `Connect` в блоке MCP и увидите `add` и `echo`. По умолчанию C++ подключается к `http://127.0.0.1:8000/mcp`; другой адрес можно задать переменной среды `MCP_SERVER_URL` до запуска backend.
+Во втором терминале соберите и запустите C++ backend приведёнными выше командами, затем откройте `http://127.0.0.1:8080` и нажмите `Connect` в блоке MCP. Раскройте `Available tools`, выберите `get_todo`, укажите `id` и явно нажмите `Run tool`. Ответ и статус вызова появятся в `Recent calls`. `add` и `echo` также доступны. По умолчанию C++ подключается к `http://127.0.0.1:8000/mcp`; другой адрес можно задать переменной среды `MCP_SERVER_URL` до запуска backend.
 
 ### Через CMake
 
@@ -373,6 +374,7 @@ g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\mcp_client_tests.cpp -o build\m
 | `POST /api/mcp/connect` | — | MCP handshake и первоначальный `tools/list` |
 | `POST /api/mcp/disconnect` | — | Закрыть MCP-сессию и очистить cached tools |
 | `GET /api/mcp/tools` | — | Обновить или вернуть текущее состояние MCP tools |
+| `POST /api/mcp/call` | `{"name":"get_todo","arguments":"{\"id\":5}"}` | Вызвать выбранный tool вручную и вернуть историю результатов |
 | `POST /api/chats` | `{"name":"Проект C++"}` | Создать именованный чат и выбрать его |
 | `POST /api/chats/select` | `{"chat_id":"1"}` | Выбрать существующий чат |
 | `POST /api/chats/delete` | `{"chat_id":"1"}` | Удалить чат, его рабочую память и RAM-историю; общая long-term memory сохраняется |
