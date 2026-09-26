@@ -2,6 +2,9 @@
 
 #include "agent.h"
 #include "mcp_client.h"
+#include "reminder_store.h"
+#include "reminder_scheduler.h"
+#include "reminder_events.h"
 
 #include <cctype>
 #include <atomic>
@@ -9,6 +12,8 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
+#include <mutex>
 #include <sstream>
 #include <string>
 
@@ -294,6 +299,38 @@ std::string buildMcpStateJson(const McpClient& mcpClient,
                 ? mcpClient.lastError() : requestError) + "\"}";
 }
 
+std::string buildReminderStateJson(const ReminderStore& store, const std::string& requestError = {}) {
+    std::vector<Reminder> reminders;
+    std::vector<ReminderNotification> notifications;
+    std::string error;
+    store.snapshot(reminders, notifications, error);
+    if (!requestError.empty()) error = requestError;
+    std::string result = "{\"reminders\":[";
+    bool first = true;
+    for (const auto& reminder : reminders) {
+        if (!first) result += ',';
+        first = false;
+        result += "{\"id\":" + std::to_string(reminder.id) +
+            ",\"text\":\"" + jsonEscape(reminder.text) +
+            "\",\"run_at\":\"" + reminderUtcTime(reminder.runAt) +
+            "\",\"status\":\"" + jsonEscape(reminder.status) +
+            "\",\"created_at\":\"" + reminderUtcTime(reminder.createdAt) +
+            "\",\"triggered_at\":" + (reminder.triggeredAt
+                ? "\"" + reminderUtcTime(reminder.triggeredAt) + "\"" : "null") + "}";
+    }
+    result += "],\"notifications\":[";
+    first = true;
+    for (const auto& notification : notifications) {
+        if (!first) result += ',';
+        first = false;
+        result += "{\"id\":" + std::to_string(notification.id) +
+            ",\"reminder_id\":" + std::to_string(notification.reminderId) +
+            ",\"text\":\"" + jsonEscape(notification.text) +
+            "\",\"triggered_at\":\"" + reminderUtcTime(notification.triggeredAt) + "\"}";
+    }
+    return result + "],\"error\":\"" + jsonEscape(error) + "\"}";
+}
+
 bool parseContentLength(const std::string& text, size_t& value) {
     size_t position = 0;
     while (position < text.size() &&
@@ -317,7 +354,10 @@ bool parseContentLength(const std::string& text, size_t& value) {
 }
 
 #ifdef _WIN32
-struct HttpRequest { std::string method; std::string path; std::string body; };
+struct HttpRequest {
+    std::string method; std::string path; std::string body;
+    std::map<std::string, std::string> headers;
+};
 
 bool sendAll(SOCKET socket, const std::string& data) {
     size_t sent = 0;
@@ -350,6 +390,11 @@ bool readHttpRequest(SOCKET client, HttpRequest& request) {
         if (colon == std::string::npos) continue;
         std::string name = line.substr(0, colon);
         for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        std::string value = line.substr(colon + 1);
+        const auto begin = value.find_first_not_of(" \t");
+        const auto end = value.find_last_not_of(" \t");
+        value = begin == std::string::npos ? "" : value.substr(begin, end - begin + 1);
+        request.headers[name] = value;
         if (name == "content-length" &&
             !parseContentLength(line.substr(colon + 1), contentLength)) return false;
     }
@@ -396,6 +441,15 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
     }
     gStopRequested.store(false);
     SetConsoleCtrlHandler(handleConsoleSignal, TRUE);
+    ReminderStore reminderStore;
+    ReminderEvents reminderEvents;
+    std::mutex reminderEventMutex;
+    const auto publishReminders = [&] {
+        std::lock_guard<std::mutex> lock(reminderEventMutex);
+        reminderEvents.broadcast("{\"type\":\"update\"," + buildReminderStateJson(reminderStore).substr(1));
+    };
+    ReminderScheduler reminderScheduler(reminderStore, publishReminders);
+    reminderScheduler.start();
     std::cout << "Open http://127.0.0.1:8080 in your browser\nPress Ctrl+C to stop the server\n";
     while (!gStopRequested.load()) {
         fd_set readSet;
@@ -416,6 +470,46 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
         HttpRequest request;
         if (!readHttpRequest(client, request)) {
             sendHttpResponse(client, 400, "application/json", "{\"error\":\"Invalid request\"}");
+        } else if (request.method == "GET" && request.path == "/api/reminders/events") {
+            const auto lower = [](std::string value) {
+                for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                return value;
+            };
+            const std::string origin = request.headers["origin"];
+            if (lower(request.headers["upgrade"]) != "websocket" ||
+                lower(request.headers["connection"]).find("upgrade") == std::string::npos ||
+                request.headers["sec-websocket-version"] != "13" ||
+                (!origin.empty() && origin != "http://127.0.0.1:8080" && origin != "http://localhost:8080")) {
+                sendHttpResponse(client, 400, "application/json", "{\"error\":\"A same-origin WebSocket connection is required\"}");
+            } else {
+                std::string error;
+                std::lock_guard<std::mutex> lock(reminderEventMutex);
+                const std::string state = "{\"type\":\"snapshot\"," + buildReminderStateJson(reminderStore).substr(1);
+                if (reminderEvents.addClient(static_cast<std::uintptr_t>(client), request.headers["sec-websocket-key"], state, error)) {
+                    // The event stream now owns the socket; the HTTP loop remains available.
+                    continue;
+                }
+                sendHttpResponse(client, 400, "application/json", "{\"error\":\"" + jsonEscape(error) + "\"}");
+            }
+        } else if (request.method == "GET" && request.path == "/api/reminders") {
+            sendHttpResponse(client, 200, "application/json", buildReminderStateJson(reminderStore));
+        } else if (request.method == "POST" && request.path == "/api/reminders") {
+            std::string text, runAt, result, error;
+            bool success = false;
+            if (!extractJsonStringField(request.body, "text", text) ||
+                !extractJsonStringField(request.body, "run_at", runAt)) {
+                error = "Reminder text and run_at are required";
+            } else if (!reminderStore.isReady()) {
+                error = reminderStore.initializationError();
+            } else {
+                const std::string arguments = "{\"text\":\"" + jsonEscape(text) + "\",\"run_at\":\"" + jsonEscape(runAt) + "\"}";
+                success = mcpClient.callTool("create_reminder", arguments, result, error);
+            }
+            if (success) publishReminders();
+            std::string state = buildReminderStateJson(reminderStore, error);
+            state.pop_back();
+            sendHttpResponse(client, success ? 200 : 400, "application/json",
+                state + ",\"mcp\":" + buildMcpStateJson(mcpClient) + "}");
         } else if (request.method == "POST" && request.path == "/api/mcp/connect") {
             std::string error;
             const bool success = mcpClient.connect(error);
@@ -439,7 +533,8 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
                     buildMcpStateJson(mcpClient,
                         "Tool name and JSON arguments are required"));
             } else {
-                mcpClient.callTool(name, arguments, result, error);
+                const bool success = mcpClient.callTool(name, arguments, result, error);
+                if (success && name == "create_reminder") publishReminders();
                 sendHttpResponse(client, 200, "application/json", buildMcpStateJson(mcpClient));
             }
         } else if (request.method == "POST" && request.path == "/api/chat") {
@@ -586,11 +681,14 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
             if (request.method == "GET" && request.path == "/") { fileName = "index.html"; contentType = "text/html"; }
             else if (request.method == "GET" && request.path == "/styles.css") { fileName = "styles.css"; contentType = "text/css"; }
             else if (request.method == "GET" && request.path == "/app.js") { fileName = "app.js"; contentType = "application/javascript"; }
+            else if (request.method == "GET" && request.path == "/reminders.js") { fileName = "reminders.js"; contentType = "application/javascript"; }
             const std::string content = fileName.empty() ? "" : readFile(fileName);
             sendHttpResponse(client, content.empty() ? 404 : 200, content.empty() ? "text/plain" : contentType, content.empty() ? "Not found" : content);
         }
         closesocket(client);
     }
+    reminderScheduler.stop();
+    reminderEvents.stop();
     SetConsoleCtrlHandler(handleConsoleSignal, FALSE);
     closesocket(server);
     WSACleanup();

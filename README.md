@@ -1,5 +1,59 @@
 # C++ Agent Chat
 
+## Day 18 — MCP Reminder и фоновый Scheduler
+
+`create_reminder(text, run_at)` добавлен в существующий Python MCP-server. Tool валидирует текст и будущую дату, записывает `pending` в отдельный `reminders.db` и сразу возвращает `id`, `text`, `run_at`, `status`. `add`, `echo`, `get_todo` сохранены; LLM не выбирает инструменты.
+
+```text
+Reminder UI -> POST /api/reminders -> existing McpClient.tools/call
+  -> Python create_reminder -> reminders.db
+Background ReminderScheduler -> reminders.db -> WebSocket -> UI + Browser Notification
+```
+
+Scheduler работает в отдельном потоке C++ backend с интервалом 1 секунда. Транзакция атомарно меняет `pending` на `triggered`, сохраняет `triggered_at` и notification; UNIQUE по reminder_id исключает повторную запись уведомления. При старте обрабатываются сохранённые pending, включая просроченные. MCP-server нужен для создания, но не для срабатывания уже сохранённых reminders. Пока backend выключен, проверки не выполняются.
+
+Хранилище и история уведомлений отделены от memory/task state/invariants/policies/personalization. По умолчанию оба процесса используют `reminders.db` в корне проекта; запускайте backend из корня. Для другого файла задайте одинаковый абсолютный `$env:REMINDERS_DB` в обоих терминалах. Файлы DB/WAL/SHM исключены из Git.
+
+Форма, кнопки `+1/+2 минуты`, список reminders и время уведомлений используют московское время (МСК, UTC+03:00), независимо от часового пояса компьютера. MCP также принимает `2026-09-26 18:00:00` как московское время; явный offset в ISO 8601 учитывается как переданный момент времени. Хранение — Unix UTC, API — ISO UTC: например, 18:00 МСК соответствует 15:00Z. Сохранённые reminders не пересчитываются.
+
+### Запуск и проверка
+
+Один раз установите Python-зависимости (см. «Запуск MCP-server» ниже). Терминал 1:
+
+```powershell
+Set-Location D:\AIAgentsCourse
+.\.venv-mcp\Scripts\python.exe mcp_server\server.py
+```
+
+Терминал 2 (сборка нужна после изменения C++, не перед каждым запуском):
+
+```powershell
+Set-Location D:\AIAgentsCourse
+cmake --preset mingw-debug
+cmake --build --preset mingw-debug
+.\load-env.ps1
+.\build\mingw-debug\openai_cli.exe
+```
+
+Откройте `http://127.0.0.1:8080`, нажмите MCP `Connect`. В Reminder введите текст, нажмите `+1 min` или `+2 min`, затем `Create Reminder`. Разрешите уведомления в браузере. Reminder сначала появится как pending, затем автоматически как triggered и в Notifications; браузер покажет системное уведомление при выданном разрешении. Можно продолжать пользоваться чатом.
+
+Разрешение запрашивается только при явном действии пользователя, один раз (маркер в localStorage). Если оно отклонено, включите его вручную в настройках сайта; UI-уведомления всё равно работают. WebSocket `/api/reminders/events` автоматически переподключается. При загрузке страницы история восстанавливается без повторных системных уведомлений; после временного разрыва открытая страница получает пропущенные события. Browser Notifications требуют открытого интерфейса и разрешения браузера/ОС; Service Worker/Web Push не добавлены.
+
+Проверка сохранения: создайте pending через `+2 min`, остановите только C++ backend через Ctrl+C, снова запустите executable — reminder останется и сработает автоматически. Не удаляйте `reminders.db` между запусками.
+
+Тесты (без OpenAI-запросов и без изменения рабочих баз):
+
+```powershell
+cmake --preset mingw-debug -DBUILD_TESTING=ON
+cmake --build --preset mingw-debug
+ctest --test-dir build/mingw-debug --output-on-failure
+.\.venv-mcp\Scripts\python.exe tests\test_reminder_store.py
+node tests\reminder_timezone_tests.cjs # Optional JS timezone test; requires Node.js
+.\.venv-mcp\Scripts\python.exe tests\day18_integration.py
+```
+
+Последний тест сам запускает отдельный MCP-server и backend с изолированными базами в `build`; порты 8080/18000 должны быть свободны. Проверяет реальный `tools/call`, WebSocket, ошибки даты, сохранение при перезапуске, отсутствие дублей и срабатывание даже после остановки MCP-server. Системное уведомление проверяется вручную в браузере.
+
 ## Day 17 — MCP: ручной запуск tools
 
 MCP добавлен отдельным слоем и не связан с memory, task state machine, invariants, policies или personalization:
@@ -75,6 +129,11 @@ flowchart LR
 | `api_client.h`, `api_client.cpp` | OpenAI HTTP API через libcurl и разбор ответа |
 | `mcp_client.h`, `mcp_client.cpp` | MCP handshake, `tools/list` и ручной `tools/call` через libcurl |
 | `mcp_server/server.py` | Отдельный локальный MCP-server на официальном Python SDK |
+| `mcp_server/reminder_store.py`, `mcp_server/reminders_schema.sql` | Валидация/регистрация reminder и общая SQLite-схема |
+| `reminder_store.h`, `reminder_store.cpp` | Изолированное хранилище, атомарное срабатывание и notification history |
+| `reminder_scheduler.h`, `reminder_scheduler.cpp` | Фоновая проверка pending reminders |
+| `reminder_events.h`, `reminder_events.cpp` | Независимый WebSocket-поток backend → frontend |
+| `reminders.js` | Reminder-форма, realtime UI и Browser Notifications |
 | `memory_store.h`, `memory_store.cpp` | SQLite: общие долговременные факты, рабочая память чатов, названия и настройки |
 | `web_server.h`, `web_server.cpp` | Локальные HTTP-маршруты и выдача статических файлов |
 | `index.html`, `styles.css`, `app.js` | Веб-интерфейс |
@@ -314,7 +373,7 @@ pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-curl mingw-w64-ucrt-x8
 ### Через g++
 
 ```powershell
-g++ -std=c++17 main.cpp agent.cpp api_client.cpp web_server.cpp memory_store.cpp invariant_store.cpp mcp_client.cpp -o main.exe -lcurl -lws2_32 -lsqlite3
+g++ -std=c++17 main.cpp agent.cpp api_client.cpp web_server.cpp memory_store.cpp invariant_store.cpp mcp_client.cpp reminder_store.cpp reminder_scheduler.cpp reminder_events.cpp -o main.exe -lcurl -lws2_32 -lsqlite3 -lbcrypt -lcrypt32 -pthread
 .\load-env.ps1
 .\main.exe
 ```
@@ -339,10 +398,10 @@ py -3.11 -m venv .venv-mcp
 ### Через CMake
 
 ```powershell
-cmake -S . -B build
-cmake --build build
+cmake --preset mingw-debug
+cmake --build --preset mingw-debug
 .\load-env.ps1
-.\build\openai_cli.exe
+.\build\mingw-debug\openai_cli.exe
 ```
 
 У multi-config генератора executable может находиться, например, в `build\Debug\openai_cli.exe`. Рабочей папкой при запуске всё равно должен быть корень проекта, где находятся конфиг и статические файлы.
@@ -356,7 +415,7 @@ cmake --build build
 ```powershell
 g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\agent_tests.cpp agent.cpp memory_store.cpp invariant_store.cpp -o build\agent-tests.exe -lsqlite3
 .\build\agent-tests.exe
-g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\web_parser_tests.cpp agent.cpp api_client.cpp memory_store.cpp invariant_store.cpp mcp_client.cpp -o build\web-parser-tests.exe -lcurl -lws2_32 -lsqlite3
+g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\web_parser_tests.cpp agent.cpp api_client.cpp memory_store.cpp invariant_store.cpp mcp_client.cpp reminder_store.cpp reminder_scheduler.cpp reminder_events.cpp -o build\web-parser-tests.exe -lcurl -lws2_32 -lsqlite3 -lbcrypt -lcrypt32 -pthread
 .\build\web-parser-tests.exe
 g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\mcp_client_tests.cpp -o build\mcp-client-tests.exe -lcurl -lws2_32
 .\build\mcp-client-tests.exe
@@ -375,6 +434,9 @@ g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\mcp_client_tests.cpp -o build\m
 | `POST /api/mcp/disconnect` | — | Закрыть MCP-сессию и очистить cached tools |
 | `GET /api/mcp/tools` | — | Обновить или вернуть текущее состояние MCP tools |
 | `POST /api/mcp/call` | `{"name":"get_todo","arguments":"{\"id\":5}"}` | Вызвать выбранный tool вручную и вернуть историю результатов |
+| `POST /api/reminders` | `{"text":"Тренировка","run_at":"2026-09-26T18:00:00+03:00"}` | Создать reminder через существующий MCP `tools/call` |
+| `GET /api/reminders` | — | Прочитать reminders и сохранённые notifications |
+| `GET /api/reminders/events` | WebSocket upgrade | Snapshot и realtime updates для открытого UI |
 | `POST /api/chats` | `{"name":"Проект C++"}` | Создать именованный чат и выбрать его |
 | `POST /api/chats/select` | `{"chat_id":"1"}` | Выбрать существующий чат |
 | `POST /api/chats/delete` | `{"chat_id":"1"}` | Удалить чат, его рабочую память и RAM-историю; общая long-term memory сохраняется |

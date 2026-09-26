@@ -10,3 +10,6 @@ agent_config.local.json
 agent_memory.db
 agent_memory.db-shm
 agent_memory.db-wal
+reminders.db
+reminders.db-shm
+reminders.db-wal

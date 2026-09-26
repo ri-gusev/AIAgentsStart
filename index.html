@@ -137,6 +137,28 @@
           <div id="mcpCallLog" class="mcp-call-log" aria-live="polite">No tool calls yet.</div>
         </section>
 
+        <section class="side-card reminder-panel" aria-labelledby="reminderTitle">
+          <div class="mcp-heading"><h3 id="reminderTitle">Reminder</h3><span id="reminderConnection" class="reminder-stream-status">Подключение…</span></div>
+          <form id="reminderForm" class="reminder-form">
+            <label>Text<input id="reminderText" type="text" maxlength="2000" placeholder="Пойти на тренировку" required></label>
+            <label>Date / Time (МСК)<input id="reminderRunAt" type="datetime-local" step="1" required></label>
+            <span class="reminder-hint">Московское время — МСК (UTC+03:00).</span>
+            <div class="mcp-actions">
+              <button id="reminderPlusOne" class="secondary-button" type="button">+1 минута</button>
+              <button id="reminderPlusTwo" class="secondary-button" type="button">+2 минуты</button>
+            </div>
+            <button id="createReminderButton" class="secondary-button" type="submit" disabled>Create Reminder</button>
+          </form>
+          <p id="reminderHint" class="reminder-hint">Подключите MCP для создания напоминания.</p>
+          <p id="reminderError" class="mcp-error" role="status" hidden></p>
+          <div class="mcp-tools-heading">Reminders</div>
+          <div id="reminderList" class="reminder-list" aria-live="polite">Загрузка…</div>
+          <div class="mcp-tools-heading">Notifications</div>
+          <button id="enableReminderNotifications" class="secondary-button" type="button">Разрешить уведомления</button>
+          <p id="reminderNotificationPermission" class="reminder-hint"></p>
+          <div id="reminderNotifications" class="reminder-list" aria-live="polite">Пока нет уведомлений.</div>
+        </section>
+
         <section class="side-card memory-panel" aria-label="Память и стоимость">
           <h3>Память и токены</h3>
           <dl class="memory-stats" aria-live="polite">
@@ -175,5 +197,6 @@
     </div>
   </main>
   <script src="/app.js"></script>
+  <script src="/reminders.js"></script>
 </body>
 </html>

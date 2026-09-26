@@ -70,6 +70,7 @@ let currentTask = {
 let editingInvariantKey = '';
 let mcpPending = false;
 let currentMcpStatus = 'Disconnected';
+let currentMcpTools = [];
 
 function mcpArgumentSummary(schema) {
   const properties = schema && typeof schema === 'object' && schema.properties &&
@@ -87,6 +88,10 @@ function updateMcpControls() {
   mcpConnectButton.disabled = mcpPending || connected;
   mcpDisconnectButton.disabled = mcpPending || currentMcpStatus === 'Disconnected';
   mcpRefreshButton.disabled = mcpPending || !connected;
+  mcpTools.querySelectorAll('button[type="submit"]').forEach((button) => {
+    button.disabled = mcpPending || !connected;
+  });
+  if (typeof updateReminderControls === 'function') updateReminderControls();
 }
 
 function makeToolArgumentField(name, definition, required) {
@@ -127,6 +132,7 @@ function makeToolArgumentField(name, definition, required) {
 }
 
 function renderMcpState(data = {}) {
+  currentMcpTools = Array.isArray(data.tools) ? data.tools : [];
   currentMcpStatus = ['Connected', 'Disconnected', 'Error'].includes(data.status)
     ? data.status : 'Error';
   mcpStatus.textContent = currentMcpStatus;
@@ -228,6 +234,9 @@ function renderMcpCalls(calls) {
 
 async function runMcpTool(name, args, button) {
   if (mcpPending) return;
+  if (name === 'create_reminder' && typeof requestReminderNotificationPermission === 'function') {
+    requestReminderNotificationPermission();
+  }
   mcpPending = true;
   button.disabled = true;
   updateMcpControls();
