@@ -50,16 +50,19 @@ int main() {
         std::thread two([&] { std::string detail; bSuccess = second.triggerDue(now, b, detail); });
         one.join(); two.join();
         require(aSuccess && bSuccess && a.size() + b.size() == 1, "concurrent ticks trigger exactly once");
-        require(first.snapshot(reminders, notifications, error) && notifications.size() == 1 &&
-                reminders[0].status == "triggered" && reminders[0].triggeredAt == now && reminders[1].status == "pending",
-                "status, triggered_at and durable notification commit together");
+        require(first.snapshot(reminders, notifications, error) && notifications.empty() &&
+                reminders.size() == 1 && reminders[0].status == "pending",
+                "only pending reminders remain stored; completed reminders and notification history are not retained");
         require(first.triggerDue(now, a, error) && a.empty(), "repeat tick does not repeat notification");
 
         insert(path.string(), now - 1);
         std::mutex mutex;
         std::condition_variable wake;
         bool received = false;
-        ReminderScheduler scheduler(second, [&] { std::lock_guard<std::mutex> lock(mutex); received = true; wake.notify_one(); });
+        std::size_t eventCount = 0;
+        ReminderScheduler scheduler(second, [&](const std::vector<ReminderNotification>& events) {
+            std::lock_guard<std::mutex> lock(mutex); eventCount += events.size(); received = true; wake.notify_one();
+        });
         scheduler.start();
         {
             std::unique_lock<std::mutex> lock(mutex);
@@ -67,12 +70,19 @@ int main() {
                     "background scheduler catches overdue pending reminders without a request");
         }
         scheduler.stop();
-        require(first.snapshot(reminders, notifications, error) && notifications.size() == 2,
-                "scheduler persists its notification");
+        require(first.snapshot(reminders, notifications, error) && notifications.empty() && reminders.size() == 1 && eventCount == 1,
+                "scheduler delivers transient notification and removes the completed reminder");
         ReminderStore restarted(path.string(), schema);
         require(restarted.triggerDue(now + 3600, a, error) && a.size() == 1,
                 "saved future pending reminder resumes after restart");
-        std::cout << "Reminder persistence, atomic triggering, concurrency and background scheduler passed\n";
+        insert(path.string(), now + 7200);
+        require(restarted.snapshot(reminders, notifications, error) && reminders.size() == 1, "create pending reminder for deletion");
+        const auto cancelled = reminders[0].id;
+        require(restarted.deletePending(cancelled, error), "pending reminder can be deleted");
+        require(!restarted.deletePending(cancelled, error) && !restarted.deletePending(0, error), "missing and invalid deletion IDs rejected");
+        require(restarted.triggerDue(now + 10000, a, error) && a.empty(), "deleted reminder never triggers");
+        require(restarted.snapshot(reminders, notifications, error) && reminders.empty() && notifications.empty(), "no completed history remains");
+        std::cout << "Pending persistence, transient events, atomic claiming, concurrency, deletion and background scheduler passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n'; return 1;
     }

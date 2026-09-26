@@ -30,6 +30,7 @@ public:
                   std::vector<ReminderNotification>& notifications, std::string& error) const;
     bool triggerDue(std::int64_t now, std::vector<ReminderNotification>& triggered,
                     std::string& error) const;
+    bool deletePending(std::int64_t id, std::string& error) const;
 private:
     std::string databasePath_;
     std::string initializationError_;

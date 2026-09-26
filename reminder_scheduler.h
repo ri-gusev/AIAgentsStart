@@ -8,7 +8,8 @@
 
 class ReminderScheduler {
 public:
-    ReminderScheduler(const ReminderStore& store, std::function<void()> onTriggered);
+    ReminderScheduler(const ReminderStore& store,
+                      std::function<void(const std::vector<ReminderNotification>&)> onTriggered);
     ~ReminderScheduler();
     void start();
     void stop();
@@ -16,7 +17,7 @@ public:
 private:
     void run();
     const ReminderStore& store_;
-    std::function<void()> onTriggered_;
+    std::function<void(const std::vector<ReminderNotification>&)> onTriggered_;
     mutable std::mutex mutex_;
     std::condition_variable wake_;
     bool stopped_ = false;

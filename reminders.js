@@ -25,6 +25,8 @@ let reminderSocket;
 let reminderClosing = false;
 const seenReminderNotifications = new Set();
 let reminderPermissionAsked = false;
+let reminderToastTimer;
+const reminderDeletingIds = new Set();
 try { reminderPermissionAsked = localStorage.getItem('reminder.permission.requested') === '1'; } catch {}
 
 function setReminderOffset(minutes) {
@@ -82,8 +84,8 @@ function renderReminderState(data) {
   reminderError.textContent = error;
   reminderError.hidden = !error;
   reminderList.replaceChildren();
-  const reminders = Array.isArray(data.reminders) ? data.reminders : [];
-  if (!reminders.length) reminderList.textContent = 'Пока нет напоминаний.';
+  const reminders = Array.isArray(data.reminders) ? data.reminders.filter((item) => item.status === 'pending') : [];
+  if (!reminders.length) reminderList.textContent = 'Нет запланированных напоминаний.';
   reminders.forEach((reminder) => {
     const item = document.createElement('article');
     item.className = 'reminder-item';
@@ -92,13 +94,50 @@ function renderReminderState(data) {
     text.textContent = String(reminder.text);
     const details = document.createElement('small');
     details.textContent = displayReminderTime(reminder.run_at) + ' · ' + String(reminder.status);
-    item.append(text, details);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'secondary-button reminder-delete';
+    remove.dataset.reminderId = String(reminder.id);
+    remove.textContent = 'Удалить';
+    remove.setAttribute('aria-label', 'Удалить напоминание: ' + String(reminder.text));
+    remove.disabled = reminderDeletingIds.has(String(reminder.id));
+    remove.addEventListener('click', () => deleteReminder(reminder.id, remove));
+    item.append(text, details, remove);
     reminderList.append(item);
   });
+}
+
+async function deleteReminder(id, button) {
+  const key = String(id);
+  if (reminderDeletingIds.has(key)) return;
+  reminderDeletingIds.add(key);
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/reminders/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: key })
+    });
+    const data = await response.json();
+    reminderError.textContent = typeof data.error === 'string' ? data.error : '';
+    reminderError.hidden = !reminderError.textContent;
+    // Successful list updates arrive via WebSocket. A slower HTTP response
+    // must not restore a reminder already removed by a scheduler event.
+  } catch {
+    reminderError.textContent = 'Не удалось удалить напоминание. Проверьте backend.';
+    reminderError.hidden = false;
+  } finally {
+    reminderDeletingIds.delete(key);
+    button.disabled = false;
+    reminderList.querySelectorAll('button[data-reminder-id]').forEach((item) => {
+      item.disabled = reminderDeletingIds.has(item.dataset.reminderId);
+    });
+  }
+}
+
+function showReminderNotifications(notifications) {
+  clearTimeout(reminderToastTimer);
   reminderNotifications.replaceChildren();
-  const notifications = Array.isArray(data.notifications) ? data.notifications : [];
-  if (!notifications.length) reminderNotifications.textContent = 'Пока нет уведомлений.';
-  [...notifications].reverse().forEach((notification) => {
+  notifications.forEach((notification) => {
     const item = document.createElement('article');
     item.className = 'reminder-item';
     const text = document.createElement('strong');
@@ -108,17 +147,22 @@ function renderReminderState(data) {
     item.append(text, time);
     reminderNotifications.append(item);
   });
+  // A short-lived message is not a completed-reminder history.
+  reminderToastTimer = setTimeout(() => {
+    reminderNotifications.replaceChildren();
+    reminderNotifications.textContent = 'Новых уведомлений нет.';
+  }, 15000);
 }
 
 function applyReminderEvent(data) {
   renderReminderState(data);
-  const notifications = Array.isArray(data.notifications) ? data.notifications : [];
+  const notifications = data.type === 'snapshot' || !Array.isArray(data.notifications) ? [] :
+    data.notifications.filter((notification) => !seenReminderNotifications.has(String(notification.id)));
+  if (notifications.length) showReminderNotifications(notifications);
   notifications.forEach((notification) => {
     const id = String(notification.id);
-    if (seenReminderNotifications.has(id)) return;
     seenReminderNotifications.add(id);
-    // First snapshot restores history silently; reconnects deliver missed events.
-    if (!reminderStateInitialized || !('Notification' in window) || Notification.permission !== 'granted') return;
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
     try {
       const toast = new Notification('Reminder', {
         body: String(notification.text), tag: 'reminder-' + String(notification.reminder_id)
@@ -174,7 +218,8 @@ reminderForm.addEventListener('submit', async (event) => {
     });
     const data = await response.json();
     if (data.mcp) renderMcpState(data.mcp);
-    renderReminderState(data);
+    reminderError.textContent = typeof data.error === 'string' ? data.error : '';
+    reminderError.hidden = !reminderError.textContent;
     if (response.ok) { reminderText.value = ''; setReminderOffset(1); }
   } catch {
     reminderError.textContent = 'Backend недоступен. Напоминание не подтверждено.';

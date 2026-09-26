@@ -11,8 +11,8 @@ CREATE TABLE IF NOT EXISTS reminders (
           (status = 'triggered' AND triggered_at IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS reminders_due ON reminders(status, run_at);
-CREATE TABLE IF NOT EXISTS reminder_notifications (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    reminder_id INTEGER NOT NULL UNIQUE REFERENCES reminders(id),
-    created_at INTEGER NOT NULL
-);
+-- Migrate earlier Day 18 history: only scheduled reminders are retained.
+BEGIN IMMEDIATE;
+DROP TABLE IF EXISTS reminder_notifications;
+DELETE FROM reminders WHERE status = 'triggered';
+COMMIT;

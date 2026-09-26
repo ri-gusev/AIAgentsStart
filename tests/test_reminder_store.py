@@ -49,7 +49,23 @@ class ReminderStoreTest(unittest.TestCase):
                 self.assertEqual(row[2], int(future.timestamp()))
                 self.assertEqual(row[3], "pending")
                 self.assertIsNone(row[5])
-                self.assertEqual(db.execute("SELECT count(*) FROM reminder_notifications").fetchone()[0], 0)
+                self.assertEqual(db.execute("SELECT count(*) FROM sqlite_master WHERE name='reminder_notifications'").fetchone()[0], 0)
+
+    def test_migration_removes_old_completed_history_but_keeps_pending(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "reminders.db"
+            store = ReminderStore(path)
+            future = (datetime.now(timezone.utc) + timedelta(minutes=2)).isoformat()
+            pending = store.create("Keep pending", future)
+            completed = store.create("Old completed reminder", future)
+            with closing(sqlite3.connect(path)) as db, db:
+                db.execute("UPDATE reminders SET status='triggered',triggered_at=1 WHERE id=?", (completed["id"],))
+                db.execute("CREATE TABLE reminder_notifications(id INTEGER PRIMARY KEY,reminder_id INTEGER,created_at INTEGER)")
+                db.execute("INSERT INTO reminder_notifications VALUES (1,?,1)", (completed["id"],))
+            ReminderStore(path)
+            with closing(sqlite3.connect(path)) as db:
+                self.assertEqual(db.execute("SELECT id,status FROM reminders").fetchall(), [(pending["id"], "pending")])
+                self.assertEqual(db.execute("SELECT count(*) FROM sqlite_master WHERE name='reminder_notifications'").fetchone()[0], 0)
 
     def test_invalid_inputs_do_not_create_records(self):
         with tempfile.TemporaryDirectory() as folder:

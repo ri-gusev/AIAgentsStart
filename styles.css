@@ -186,7 +186,7 @@ textarea::placeholder, input::placeholder { color: #929ab3; }
 .reminder-item { padding: 8px; margin-top: 6px; border: 1px solid #c6cdeb; border-radius: 9px; background: rgba(255,255,255,.78); overflow-wrap: anywhere; }
 .reminder-item strong { display: block; color: var(--ink); font-size: 11px; }
 .reminder-item small { display: block; margin-top: 4px; font-size: 10px; }
-.reminder-item[data-status="triggered"] { border-color: #81b7ab; }
+.reminder-delete { margin-top: 8px; padding: 5px 10px; }
 .memory-stats { margin: 0; display: grid; gap: 9px; }
 .memory-stats dt { color: var(--muted); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
 .memory-stats dd { margin: 3px 0 0; color: var(--ink); font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }

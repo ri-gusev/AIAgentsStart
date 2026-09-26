@@ -299,11 +299,12 @@ std::string buildMcpStateJson(const McpClient& mcpClient,
                 ? mcpClient.lastError() : requestError) + "\"}";
 }
 
-std::string buildReminderStateJson(const ReminderStore& store, const std::string& requestError = {}) {
+std::string buildReminderStateJson(const ReminderStore& store, const std::string& requestError = {},
+                                 const std::vector<ReminderNotification>& notifications = {}) {
     std::vector<Reminder> reminders;
-    std::vector<ReminderNotification> notifications;
+    std::vector<ReminderNotification> unused;
     std::string error;
-    store.snapshot(reminders, notifications, error);
+    store.snapshot(reminders, unused, error);
     if (!requestError.empty()) error = requestError;
     std::string result = "{\"reminders\":[";
     bool first = true;
@@ -448,7 +449,10 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
         std::lock_guard<std::mutex> lock(reminderEventMutex);
         reminderEvents.broadcast("{\"type\":\"update\"," + buildReminderStateJson(reminderStore).substr(1));
     };
-    ReminderScheduler reminderScheduler(reminderStore, publishReminders);
+    ReminderScheduler reminderScheduler(reminderStore, [&](const std::vector<ReminderNotification>& triggered) {
+        std::lock_guard<std::mutex> lock(reminderEventMutex);
+        reminderEvents.broadcast("{\"type\":\"triggered\"," + buildReminderStateJson(reminderStore, {}, triggered).substr(1));
+    });
     reminderScheduler.start();
     std::cout << "Open http://127.0.0.1:8080 in your browser\nPress Ctrl+C to stop the server\n";
     while (!gStopRequested.load()) {
@@ -493,6 +497,18 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
             }
         } else if (request.method == "GET" && request.path == "/api/reminders") {
             sendHttpResponse(client, 200, "application/json", buildReminderStateJson(reminderStore));
+        } else if (request.method == "POST" && request.path == "/api/reminders/delete") {
+            std::string idText, error;
+            bool success = false;
+            if (!extractJsonStringField(request.body, "id", idText) || idText.empty() ||
+                idText.find_first_not_of("0123456789") != std::string::npos) {
+                error = "A positive reminder ID is required";
+            } else {
+                try { success = reminderStore.deletePending(std::stoll(idText), error); }
+                catch (const std::exception&) { error = "Invalid reminder ID"; }
+            }
+            if (success) publishReminders();
+            sendHttpResponse(client, success ? 200 : 400, "application/json", buildReminderStateJson(reminderStore, error));
         } else if (request.method == "POST" && request.path == "/api/reminders") {
             std::string text, runAt, result, error;
             bool success = false;

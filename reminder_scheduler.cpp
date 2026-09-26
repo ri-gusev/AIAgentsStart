@@ -2,7 +2,8 @@
 #include <chrono>
 #include <ctime>
 
-ReminderScheduler::ReminderScheduler(const ReminderStore& store, std::function<void()> onTriggered)
+ReminderScheduler::ReminderScheduler(const ReminderStore& store,
+    std::function<void(const std::vector<ReminderNotification>&)> onTriggered)
     : store_(store), onTriggered_(std::move(onTriggered)) {}
 ReminderScheduler::~ReminderScheduler() { stop(); }
 void ReminderScheduler::start() {
@@ -25,7 +26,7 @@ void ReminderScheduler::run() {
         std::string error;
         store_.triggerDue(static_cast<std::int64_t>(std::time(nullptr)), triggered, error);
         { std::lock_guard<std::mutex> lock(mutex_); error_ = error; }
-        if (!triggered.empty()) onTriggered_();
+        if (!triggered.empty()) onTriggered_(triggered);
         std::unique_lock<std::mutex> lock(mutex_);
         if (wake_.wait_for(lock, std::chrono::seconds(1), [this] { return stopped_; })) return;
     }

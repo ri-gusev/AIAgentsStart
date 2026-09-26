@@ -10,9 +10,11 @@ Reminder UI -> POST /api/reminders -> existing McpClient.tools/call
 Background ReminderScheduler -> reminders.db -> WebSocket -> UI + Browser Notification
 ```
 
-Scheduler работает в отдельном потоке C++ backend с интервалом 1 секунда. Транзакция атомарно меняет `pending` на `triggered`, сохраняет `triggered_at` и notification; UNIQUE по reminder_id исключает повторную запись уведомления. При старте обрабатываются сохранённые pending, включая просроченные. MCP-server нужен для создания, но не для срабатывания уже сохранённых reminders. Пока backend выключен, проверки не выполняются.
+Scheduler работает в отдельном потоке C++ backend с интервалом 1 секунда. Транзакция атомарно забирает наступившие pending reminders и удаляет их из базы; только получивший запись Scheduler отправляет разовое notification event. Конкурентное удаление/срабатывание не создаёт повторных событий. При старте обрабатываются сохранённые pending, включая просроченные. MCP-server нужен для создания, но не для срабатывания уже сохранённых reminders. Пока backend выключен, проверки не выполняются.
 
-Хранилище и история уведомлений отделены от memory/task state/invariants/policies/personalization. По умолчанию оба процесса используют `reminders.db` в корне проекта; запускайте backend из корня. Для другого файла задайте одинаковый абсолютный `$env:REMINDERS_DB` в обоих терминалах. Файлы DB/WAL/SHM исключены из Git.
+Хранилище отделено от memory/task state/invariants/policies/personalization. В SQLite и списке Reminders остаются только запланированные (`pending`) записи. Кнопка «Удалить» отменяет reminder и удаляет его из базы через `POST /api/reminders/delete`; отменённый reminder больше не срабатывает. Завершённые reminders и история уведомлений не сохраняются. При первом запуске новой версии ранее сохранённые triggered и таблица notification history удаляются без возможности восстановления, pending сохраняются.
+
+По умолчанию оба процесса используют `reminders.db` в корне проекта; запускайте backend из корня. Для другого файла задайте одинаковый абсолютный `$env:REMINDERS_DB` в обоих терминалах. Файлы DB/WAL/SHM исключены из Git.
 
 Форма, кнопки `+1/+2 минуты`, список reminders и время уведомлений используют московское время (МСК, UTC+03:00), независимо от часового пояса компьютера. MCP также принимает `2026-09-26 18:00:00` как московское время; явный offset в ISO 8601 учитывается как переданный момент времени. Хранение — Unix UTC, API — ISO UTC: например, 18:00 МСК соответствует 15:00Z. Сохранённые reminders не пересчитываются.
 
@@ -35,9 +37,9 @@ cmake --build --preset mingw-debug
 .\build\mingw-debug\openai_cli.exe
 ```
 
-Откройте `http://127.0.0.1:8080`, нажмите MCP `Connect`. В Reminder введите текст, нажмите `+1 min` или `+2 min`, затем `Create Reminder`. Разрешите уведомления в браузере. Reminder сначала появится как pending, затем автоматически как triggered и в Notifications; браузер покажет системное уведомление при выданном разрешении. Можно продолжать пользоваться чатом.
+Откройте `http://127.0.0.1:8080`, нажмите MCP `Connect`. В Reminder введите текст, нажмите `+1 минута` или `+2 минуты`, затем `Create Reminder`. Разрешите уведомления в браузере. Reminder появится как pending, при наступлении времени исчезнет из списка и базы; в Notifications на 15 секунд появится разовое сообщение, а браузер покажет системное уведомление при выданном разрешении. Можно продолжать пользоваться чатом. Для теста используйте именно +1/+2 минуты, не пример с завтрашней датой.
 
-Разрешение запрашивается только при явном действии пользователя, один раз (маркер в localStorage). Если оно отклонено, включите его вручную в настройках сайта; UI-уведомления всё равно работают. WebSocket `/api/reminders/events` автоматически переподключается. При загрузке страницы история восстанавливается без повторных системных уведомлений; после временного разрыва открытая страница получает пропущенные события. Browser Notifications требуют открытого интерфейса и разрешения браузера/ОС; Service Worker/Web Push не добавлены.
+Разрешение запрашивается только при явном действии пользователя, один раз (маркер в localStorage). Если оно отклонено, включите его вручную в настройках сайта; UI-уведомления всё равно работают. WebSocket `/api/reminders/events` автоматически переподключается и восстанавливает список pending. Истории и повторной доставки завершённых reminders нет: разовое событие получает только подключённый интерфейс. Browser Notifications требуют открытого интерфейса и разрешения браузера/ОС; Service Worker/Web Push не добавлены.
 
 Проверка сохранения: создайте pending через `+2 min`, остановите только C++ backend через Ctrl+C, снова запустите executable — reminder останется и сработает автоматически. Не удаляйте `reminders.db` между запусками.
 
@@ -52,7 +54,7 @@ node tests\reminder_timezone_tests.cjs # Optional JS timezone test; requires Nod
 .\.venv-mcp\Scripts\python.exe tests\day18_integration.py
 ```
 
-Последний тест сам запускает отдельный MCP-server и backend с изолированными базами в `build`; порты 8080/18000 должны быть свободны. Проверяет реальный `tools/call`, WebSocket, ошибки даты, сохранение при перезапуске, отсутствие дублей и срабатывание даже после остановки MCP-server. Системное уведомление проверяется вручную в браузере.
+Последний тест сам запускает отдельный MCP-server и backend с изолированными базами в `build`; порты 8080/18000 должны быть свободны. Проверяет реальный `tools/call`, WebSocket, ошибки даты/ID, удаление и отсутствие уведомлений для отменённой записи, сохранение pending при перезапуске, отсутствие истории/дублей и срабатывание даже после остановки MCP-server. Системное уведомление проверяется вручную в браузере.
 
 ## Day 17 — MCP: ручной запуск tools
 
@@ -130,7 +132,7 @@ flowchart LR
 | `mcp_client.h`, `mcp_client.cpp` | MCP handshake, `tools/list` и ручной `tools/call` через libcurl |
 | `mcp_server/server.py` | Отдельный локальный MCP-server на официальном Python SDK |
 | `mcp_server/reminder_store.py`, `mcp_server/reminders_schema.sql` | Валидация/регистрация reminder и общая SQLite-схема |
-| `reminder_store.h`, `reminder_store.cpp` | Изолированное хранилище, атомарное срабатывание и notification history |
+| `reminder_store.h`, `reminder_store.cpp` | Изолированное pending-only хранилище, удаление и атомарное срабатывание |
 | `reminder_scheduler.h`, `reminder_scheduler.cpp` | Фоновая проверка pending reminders |
 | `reminder_events.h`, `reminder_events.cpp` | Независимый WebSocket-поток backend → frontend |
 | `reminders.js` | Reminder-форма, realtime UI и Browser Notifications |
@@ -435,7 +437,8 @@ g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\mcp_client_tests.cpp -o build\m
 | `GET /api/mcp/tools` | — | Обновить или вернуть текущее состояние MCP tools |
 | `POST /api/mcp/call` | `{"name":"get_todo","arguments":"{\"id\":5}"}` | Вызвать выбранный tool вручную и вернуть историю результатов |
 | `POST /api/reminders` | `{"text":"Тренировка","run_at":"2026-09-26T18:00:00+03:00"}` | Создать reminder через существующий MCP `tools/call` |
-| `GET /api/reminders` | — | Прочитать reminders и сохранённые notifications |
+| `GET /api/reminders` | — | Прочитать только pending reminders, без истории notifications |
+| `POST /api/reminders/delete` | `{"id":"1"}` | Отменить и удалить запланированный reminder |
 | `GET /api/reminders/events` | WebSocket upgrade | Snapshot и realtime updates для открытого UI |
 | `POST /api/chats` | `{"name":"Проект C++"}` | Создать именованный чат и выбрать его |
 | `POST /api/chats/select` | `{"chat_id":"1"}` | Выбрать существующий чат |

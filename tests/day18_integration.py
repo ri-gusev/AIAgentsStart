@@ -161,13 +161,25 @@ def main():
             event = events.receive()
             if event["notifications"]:
                 break
-        assert event["reminders"][0]["status"] == "triggered" and event["reminders"][0]["triggered_at"]
-        assert len(event["notifications"]) == 1
+        assert event["type"] == "triggered" and event["reminders"] == []
+        assert len(event["notifications"]) == 1 and event["notifications"][0]["reminder_id"] == result["id"]
         with sqlite3.connect(folder / "reminders.db") as db:
-            assert db.execute("SELECT status,triggered_at FROM reminders WHERE id=1").fetchone()[0] == "triggered"
-            assert db.execute("SELECT count(*) FROM reminder_notifications").fetchone()[0] == 1
+            assert db.execute("SELECT count(*) FROM reminders").fetchone()[0] == 0
+            assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='reminder_notifications'").fetchone()[0] == 0
+        assert request("/api/reminders")[1]["notifications"] == [], "No persisted completed-notification history"
         invalid, error = request("/api/reminders", {"text": "Invalid", "run_at": "2000-01-01T00:00:00Z"})
         assert invalid == 400 and "future" in error["error"], error
+        status, cancelled = request("/api/reminders", {
+            "text": "Cancel before due",
+            "run_at": (datetime.now(timezone.utc) + timedelta(seconds=3)).isoformat(),
+        })
+        assert status == 200, cancelled
+        cancelled_id = cancelled["reminders"][0]["id"]
+        status, removed = request("/api/reminders/delete", {"id": str(cancelled_id)})
+        assert status == 200 and removed["reminders"] == [], removed
+        assert request("/api/reminders/delete", {"id": str(cancelled_id)})[0] == 400
+        for invalid_id in ("0", "x", "1 OR 1=1", "999999999999999999999999999"):
+            assert request("/api/reminders/delete", {"id": invalid_id})[0] == 400
         status, future = request("/api/reminders", {
             "text": "Survive backend restart",
             "run_at": (datetime.now(timezone.utc) + timedelta(seconds=5)).isoformat(),
@@ -182,12 +194,14 @@ def main():
         events = EventConnection()
         state = events.receive()
         assert any(reminder["status"] == "pending" for reminder in state["reminders"]), state
-        while len(state["notifications"]) < 2:
+        while not state["notifications"]:
             state = events.receive()
-        assert all(reminder["status"] == "triggered" for reminder in state["reminders"])
+        assert state["reminders"] == [] and len(state["notifications"]) == 1
+        assert state["notifications"][0]["reminder_id"] == future["reminders"][0]["id"]
         time.sleep(1.1)
-        assert len(request("/api/reminders")[1]["notifications"]) == 2
-        print("PASS: UI API -> existing MCP tools/call -> SQLite pending -> automatic scheduler -> WebSocket; restart, validation and no duplicate events", flush=True)
+        final = request("/api/reminders")[1]
+        assert final["reminders"] == [] and final["notifications"] == []
+        print("PASS: MCP creation -> pending SQLite -> transient WebSocket event -> row removed; deletion prevents triggering; restart, validation and no completed history", flush=True)
     finally:
         if events is not None:
             events.close()

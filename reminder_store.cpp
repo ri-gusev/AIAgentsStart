@@ -81,12 +81,9 @@ bool ReminderStore::snapshot(std::vector<Reminder>& reminders,
     try {
         auto db = openDatabase(databasePath_);
         execute(db.get(), "BEGIN");
-        Statement rows(db.get(), "SELECT id,text,run_at,status,created_at,triggered_at FROM reminders ORDER BY run_at,id");
+        Statement rows(db.get(), "SELECT id,text,run_at,status,created_at,triggered_at FROM reminders WHERE status='pending' ORDER BY run_at,id");
         while (rows.next()) reminders.push_back({rows.number(0), rows.text(1), rows.number(2),
             rows.text(3), rows.number(4), rows.number(5)});
-        Statement events(db.get(), "SELECT n.id,n.reminder_id,r.text,n.created_at FROM reminder_notifications n "
-                                   "JOIN reminders r ON r.id=n.reminder_id ORDER BY n.id");
-        while (events.next()) notifications.push_back({events.number(0), events.number(1), events.text(2), events.number(3)});
         execute(db.get(), "COMMIT");
         return true;
     } catch (const std::exception& problem) { error = problem.what(); return false; }
@@ -98,8 +95,8 @@ bool ReminderStore::triggerDue(std::int64_t now, std::vector<ReminderNotificatio
     if (!isReady()) { error = initializationError_; return false; }
     try {
         auto db = openDatabase(databasePath_);
-        // The lock is shared with Python and other backend instances. State + event
-        // commit together, including after a crash or two simultaneous scheduler ticks.
+        // Claim due reminders atomically by deleting them. The event exists only
+        // in memory; concurrent schedulers/deletion cannot claim the same row twice.
         execute(db.get(), "BEGIN IMMEDIATE");
         std::vector<Reminder> due;
         {
@@ -108,12 +105,10 @@ bool ReminderStore::triggerDue(std::int64_t now, std::vector<ReminderNotificatio
             while (rows.next()) due.push_back({rows.number(0), rows.text(1), rows.number(2), "pending", 0, 0});
         }
         for (const auto& reminder : due) {
-            Statement update(db.get(), "UPDATE reminders SET status='triggered',triggered_at=? WHERE id=? AND status='pending'");
-            update.bind(1, now); update.bind(2, reminder.id); update.next();
+            Statement update(db.get(), "DELETE FROM reminders WHERE id=? AND status='pending'");
+            update.bind(1, reminder.id); update.next();
             if (sqlite3_changes(db.get()) != 1) continue;
-            Statement insert(db.get(), "INSERT INTO reminder_notifications(reminder_id,created_at) VALUES (?,?)");
-            insert.bind(1, reminder.id); insert.bind(2, now); insert.next();
-            triggered.push_back({sqlite3_last_insert_rowid(db.get()), reminder.id, reminder.text, now});
+            triggered.push_back({reminder.id, reminder.id, reminder.text, now});
         }
         execute(db.get(), "COMMIT");
         return true;
@@ -121,6 +116,21 @@ bool ReminderStore::triggerDue(std::int64_t now, std::vector<ReminderNotificatio
         // Closing an uncommitted connection rolls its transaction back.
         triggered.clear(); error = problem.what(); return false;
     }
+}
+
+bool ReminderStore::deletePending(std::int64_t id, std::string& error) const {
+    error.clear();
+    if (!isReady()) { error = initializationError_; return false; }
+    if (id <= 0) { error = "Reminder ID must be positive"; return false; }
+    try {
+        auto db = openDatabase(databasePath_);
+        Statement remove(db.get(), "DELETE FROM reminders WHERE id=? AND status='pending'");
+        remove.bind(1, id); remove.next();
+        if (sqlite3_changes(db.get()) != 1) {
+            error = "Reminder not found or already triggered"; return false;
+        }
+        return true;
+    } catch (const std::exception& problem) { error = problem.what(); return false; }
 }
 
 std::string reminderUtcTime(std::int64_t timestamp) {
