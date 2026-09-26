@@ -5,6 +5,7 @@
 #include "reminder_store.h"
 #include "reminder_scheduler.h"
 #include "reminder_events.h"
+#include "socket_platform.h"
 
 #include <cctype>
 #include <atomic>
@@ -17,10 +18,8 @@
 #include <sstream>
 #include <string>
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#ifndef _WIN32
+#include <csignal>
 #endif
 
 namespace {
@@ -38,7 +37,59 @@ BOOL WINAPI handleConsoleSignal(DWORD signal) {
     }
     return FALSE;
 }
+bool stopRequested() { return gStopRequested.load(); }
+#else
+volatile std::sig_atomic_t gStopRequested = 0;
+void handlePosixSignal(int) { gStopRequested = 1; }
+bool stopRequested() { return gStopRequested != 0; }
 #endif
+
+class ServerSignals {
+public:
+    ServerSignals() {
+#ifdef _WIN32
+        gStopRequested.store(false);
+        SetConsoleCtrlHandler(handleConsoleSignal, TRUE);
+#else
+        gStopRequested = 0;
+        struct sigaction action{};
+        action.sa_handler = handlePosixSignal;
+        sigemptyset(&action.sa_mask);
+        installedInt_ = sigaction(SIGINT, &action, &previousInt_) == 0;
+        if (installedInt_) installedTerm_ = sigaction(SIGTERM, &action, &previousTerm_) == 0;
+        ready_ = installedInt_ && installedTerm_;
+#endif
+    }
+    ~ServerSignals() {
+#ifdef _WIN32
+        SetConsoleCtrlHandler(handleConsoleSignal, FALSE);
+#else
+        if (installedInt_) sigaction(SIGINT, &previousInt_, nullptr);
+        if (installedTerm_) sigaction(SIGTERM, &previousTerm_, nullptr);
+#endif
+    }
+    bool ready() const { return ready_; }
+private:
+    bool ready_ = true;
+#ifndef _WIN32
+    struct sigaction previousInt_{}, previousTerm_{};
+    bool installedInt_ = false, installedTerm_ = false;
+#endif
+};
+
+bool validWebSocketOrigin(std::string origin, std::string host) {
+    if (origin.empty()) return true; // Non-browser clients do not send Origin.
+    for (char& c : origin) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+#ifdef _WIN32
+    (void)host;
+    return origin == "http://127.0.0.1:8080" || origin == "http://localhost:8080";
+#else
+    // The UI may be opened via the VPS IP or DNS name, not only localhost.
+    if (host.empty() || host.find_first_of("/\\?#@ \t\r\n") != std::string::npos) return false;
+    for (char& c : host) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return origin == "http://" + host;
+#endif
+}
 
 std::string jsonEscape(const std::string& text) {
     std::string result;
@@ -354,28 +405,29 @@ bool parseContentLength(const std::string& text, size_t& value) {
     return true;
 }
 
-#ifdef _WIN32
 struct HttpRequest {
     std::string method; std::string path; std::string body;
     std::map<std::string, std::string> headers;
 };
 
-bool sendAll(SOCKET socket, const std::string& data) {
+bool sendAll(net::Socket socket, const std::string& data) {
     size_t sent = 0;
     while (sent < data.size()) {
-        const int count = send(socket, data.data() + sent, static_cast<int>(data.size() - sent), 0);
-        if (count == SOCKET_ERROR || count == 0) return false;
+        const auto count = net::sendBytes(socket, data.data() + sent, data.size() - sent);
+        if (count < 0 && net::interruptedSocketError() && !stopRequested()) continue;
+        if (count <= 0) return false;
         sent += static_cast<size_t>(count);
     }
     return true;
 }
 
-bool readHttpRequest(SOCKET client, HttpRequest& request) {
+bool readHttpRequest(net::Socket client, HttpRequest& request) {
     std::string raw;
     char buffer[4096];
     size_t headerEnd = std::string::npos;
     while ((headerEnd = raw.find("\r\n\r\n")) == std::string::npos) {
-        const int count = recv(client, buffer, sizeof(buffer), 0);
+        const auto count = net::receive(client, buffer, sizeof(buffer));
+        if (count < 0 && net::interruptedSocketError() && !stopRequested()) continue;
         if (count <= 0 || raw.size() > kMaxHttpHeaderBytes) return false;
         raw.append(buffer, static_cast<size_t>(count));
     }
@@ -401,7 +453,8 @@ bool readHttpRequest(SOCKET client, HttpRequest& request) {
     }
     request.body = raw.substr(headerEnd + 4);
     while (request.body.size() < contentLength) {
-        const int count = recv(client, buffer, sizeof(buffer), 0);
+        const auto count = net::receive(client, buffer, sizeof(buffer));
+        if (count < 0 && net::interruptedSocketError() && !stopRequested()) continue;
         if (count <= 0) return false;
         request.body.append(buffer, static_cast<size_t>(count));
     }
@@ -414,7 +467,7 @@ std::string readFile(const std::string& path) {
     return file ? std::string(std::istreambuf_iterator<char>(file), {}) : std::string{};
 }
 
-void sendHttpResponse(SOCKET client, int status, const std::string& contentType, const std::string& body) {
+void sendHttpResponse(net::Socket client, int status, const std::string& contentType, const std::string& body) {
     const std::string statusText = status == 200 ? "OK" : status == 400 ? "Bad Request" :
         status == 404 ? "Not Found" : status == 502 ? "Bad Gateway" : "Internal Server Error";
     sendAll(client, "HTTP/1.1 " + std::to_string(status) + " " + statusText + "\r\n"
@@ -422,26 +475,32 @@ void sendHttpResponse(SOCKET client, int status, const std::string& contentType,
             "Content-Length: " + std::to_string(body.size()) + "\r\n"
             "Cache-Control: no-store\r\nConnection: close\r\n\r\n" + body);
 }
-#endif
 }
 
 int runWebServer(Agent& agent, McpClient& mcpClient) {
-#ifndef _WIN32
-    std::cerr << "Web mode is currently available on Windows only\n";
-    return 1;
-#else
-    WSADATA wsaData{};
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) return 1;
-    SOCKET server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (server == INVALID_SOCKET) { WSACleanup(); return 1; }
+    net::SocketRuntime runtime;
+    if (!runtime.ready()) return 1;
+    net::Socket server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (server == net::invalidSocket) return 1;
     sockaddr_in address{};
-    address.sin_family = AF_INET; address.sin_port = htons(8080); address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (bind(server, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR || listen(server, SOMAXCONN) == SOCKET_ERROR) {
-        std::cerr << "Could not start server on http://127.0.0.1:8080\n";
-        closesocket(server); WSACleanup(); return 1;
+    address.sin_family = AF_INET; address.sin_port = htons(8080);
+#ifdef _WIN32
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    constexpr const char* bindAddress = "127.0.0.1";
+#else
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    constexpr const char* bindAddress = "0.0.0.0";
+    const int reuse = 1;
+    if (setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) != 0) {
+        net::closeSocket(server); return 1;
     }
-    gStopRequested.store(false);
-    SetConsoleCtrlHandler(handleConsoleSignal, TRUE);
+#endif
+    if (bind(server, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 || listen(server, SOMAXCONN) != 0) {
+        std::cerr << "Could not start server on http://" << bindAddress << ":8080\n";
+        net::closeSocket(server); return 1;
+    }
+    ServerSignals signals;
+    if (!signals.ready()) { net::closeSocket(server); return 1; }
     ReminderStore reminderStore;
     ReminderEvents reminderEvents;
     std::mutex reminderEventMutex;
@@ -454,23 +513,25 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
         reminderEvents.broadcast("{\"type\":\"triggered\"," + buildReminderStateJson(reminderStore, {}, triggered).substr(1));
     });
     reminderScheduler.start();
-    std::cout << "Open http://127.0.0.1:8080 in your browser\nPress Ctrl+C to stop the server\n";
-    while (!gStopRequested.load()) {
-        fd_set readSet;
-        FD_ZERO(&readSet);
-        FD_SET(server, &readSet);
-        timeval waitTime{};
-        waitTime.tv_usec = 250000;
-        const int ready = select(0, &readSet, nullptr, nullptr, &waitTime);
+    std::cout << "Listening on http://" << bindAddress << ":8080\n"
+              << "Open http://127.0.0.1:8080 locally, or http://<server-ip>:8080 on Linux\n"
+              << "Press Ctrl+C to stop the server\n";
+    int exitCode = 0;
+    while (!stopRequested()) {
+        const int ready = net::waitReadable(server, 250);
         if (ready == 0) continue;
-        if (ready == SOCKET_ERROR) {
-            if (gStopRequested.load()) break;
-            continue;
+        if (ready < 0) {
+            if (stopRequested()) break;
+            if (net::interruptedSocketError()) continue;
+            std::cerr << "Socket select failed: " << net::lastSocketError() << '\n';
+            exitCode = 1; break;
         }
-        SOCKET client = accept(server, nullptr, nullptr);
-        if (client == INVALID_SOCKET) continue;
-        const DWORD timeoutMs = 10000;
-        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+        net::Socket client = accept(server, nullptr, nullptr);
+        if (client == net::invalidSocket) continue;
+        if (!net::setSocketTimeout(client, SO_RCVTIMEO, 10000) ||
+            !net::setSocketTimeout(client, SO_SNDTIMEO, 10000)) {
+            net::closeSocket(client); continue;
+        }
         HttpRequest request;
         if (!readHttpRequest(client, request)) {
             sendHttpResponse(client, 400, "application/json", "{\"error\":\"Invalid request\"}");
@@ -483,7 +544,7 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
             if (lower(request.headers["upgrade"]) != "websocket" ||
                 lower(request.headers["connection"]).find("upgrade") == std::string::npos ||
                 request.headers["sec-websocket-version"] != "13" ||
-                (!origin.empty() && origin != "http://127.0.0.1:8080" && origin != "http://localhost:8080")) {
+                !validWebSocketOrigin(origin, request.headers["host"])) {
                 sendHttpResponse(client, 400, "application/json", "{\"error\":\"A same-origin WebSocket connection is required\"}");
             } else {
                 std::string error;
@@ -701,13 +762,10 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
             const std::string content = fileName.empty() ? "" : readFile(fileName);
             sendHttpResponse(client, content.empty() ? 404 : 200, content.empty() ? "text/plain" : contentType, content.empty() ? "Not found" : content);
         }
-        closesocket(client);
+        net::closeSocket(client);
     }
     reminderScheduler.stop();
     reminderEvents.stop();
-    SetConsoleCtrlHandler(handleConsoleSignal, FALSE);
-    closesocket(server);
-    WSACleanup();
-    return 0;
-#endif
+    net::closeSocket(server);
+    return exitCode;
 }

@@ -1,4 +1,6 @@
 #include "reminder_events.h"
+#include "socket_platform.h"
+#include "websocket_handshake.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -7,11 +9,10 @@
 #include <vector>
 
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <winsock2.h>
 #include <windows.h>
 #include <bcrypt.h>
 #include <wincrypt.h>
+#endif
 
 namespace {
 std::string frame(unsigned char opcode, const std::string& payload) {
@@ -30,6 +31,7 @@ std::string frame(unsigned char opcode, const std::string& payload) {
 }
 
 bool handshakeAccept(const std::string& key, std::string& accept) {
+#ifdef _WIN32
     unsigned char nonce[32]{};
     DWORD nonceSize = sizeof(nonce);
     if (!CryptStringToBinaryA(key.c_str(), static_cast<DWORD>(key.size()), CRYPT_STRING_BASE64,
@@ -52,12 +54,15 @@ bool handshakeAccept(const std::string& key, std::string& accept) {
     if (!CryptBinaryToStringA(digest, sizeof(digest), CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, encoded.data(), &length)) return false;
     accept = encoded.data();
     return true;
+#else
+    return websocket::acceptKey(key, accept);
+#endif
 }
 }
 
 struct ReminderEvents::Impl {
     struct Client {
-        SOCKET socket;
+        net::Socket socket;
         std::string incoming;
         std::string outgoing;
         bool closing = false;
@@ -77,9 +82,9 @@ struct ReminderEvents::Impl {
     }
     bool readFrames(Client& client) {
         char buffer[4096];
-        const int count = recv(client.socket, buffer, sizeof(buffer), 0);
+        const auto count = net::receive(client.socket, buffer, sizeof(buffer));
         if (count == 0) return false;
-        if (count == SOCKET_ERROR && WSAGetLastError() != WSAEWOULDBLOCK) return false;
+        if (count < 0 && !net::temporarySocketError()) return false;
         if (count > 0) client.incoming.append(buffer, static_cast<std::size_t>(count));
         if (client.incoming.size() > 8192) return false;
         while (client.incoming.size() >= 2) {
@@ -120,17 +125,17 @@ struct ReminderEvents::Impl {
                 if (ping && !client->closing) client->outgoing += frame(9, "");
                 if (client->outgoing.size() > 1024 * 1024) alive = false;
                 if (alive && !client->outgoing.empty()) {
-                    const int sent = send(client->socket, client->outgoing.data(), static_cast<int>(client->outgoing.size()), 0);
+                    const auto sent = net::sendBytes(client->socket, client->outgoing.data(), client->outgoing.size());
                     if (sent > 0) client->outgoing.erase(0, static_cast<std::size_t>(sent));
-                    else if (sent == 0 || WSAGetLastError() != WSAEWOULDBLOCK) alive = false;
+                    else if (sent == 0 || !net::temporarySocketError()) alive = false;
                 }
                 if (client->closing && client->outgoing.empty()) alive = false;
-                if (!alive) { closesocket(client->socket); client = clients.erase(client); }
+                if (!alive) { net::closeSocket(client->socket); client = clients.erase(client); }
                 else ++client;
             }
             wake.wait_for(lock, std::chrono::milliseconds(100));
         }
-        for (const auto& client : clients) closesocket(client.socket);
+        for (const auto& client : clients) net::closeSocket(client.socket);
         clients.clear();
     }
 };
@@ -142,20 +147,19 @@ bool ReminderEvents::addClient(std::uintptr_t rawSocket, const std::string& webs
                                const std::string& initialState, std::string& error) {
     std::string accept;
     if (!handshakeAccept(websocketKey, accept)) { error = "Invalid WebSocket key"; return false; }
-    const SOCKET socket = static_cast<SOCKET>(rawSocket);
+    const net::Socket socket = static_cast<net::Socket>(rawSocket);
     const std::string response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + accept + "\r\n\r\n";
-    const DWORD timeout = 1000;
-    setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+    if (!net::setSocketTimeout(socket, SO_SNDTIMEO, 1000)) { error = "Could not set handshake timeout"; return false; }
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (impl_->stopped || impl_->clients.size() >= 32) { error = "Too many reminder connections"; return false; }
     std::size_t sent = 0;
     while (sent < response.size()) {
-        const int count = send(socket, response.data() + sent, static_cast<int>(response.size() - sent), 0);
+        const auto count = net::sendBytes(socket, response.data() + sent, response.size() - sent);
+        if (count < 0 && net::interruptedSocketError()) continue;
         if (count <= 0) { error = "WebSocket handshake failed"; return false; }
         sent += static_cast<std::size_t>(count);
     }
-    u_long nonblocking = 1;
-    if (ioctlsocket(socket, FIONBIO, &nonblocking) != 0) { error = "Could not initialize event connection"; return false; }
+    if (!net::setNonblocking(socket)) { error = "Could not initialize event connection"; return false; }
     impl_->clients.push_back({socket, {}, frame(1, initialState), false});
     impl_->wake.notify_all();
     return true;
@@ -166,13 +170,3 @@ void ReminderEvents::broadcast(const std::string& eventJson) {
     for (auto& client : impl_->clients) if (!client.closing) client.outgoing += message;
     impl_->wake.notify_all();
 }
-#else
-struct ReminderEvents::Impl {};
-ReminderEvents::ReminderEvents() : impl_(std::make_unique<Impl>()) {}
-ReminderEvents::~ReminderEvents() = default;
-void ReminderEvents::stop() {}
-bool ReminderEvents::addClient(std::uintptr_t, const std::string&, const std::string&, std::string& error) {
-    error = "Web server requires Windows"; return false;
-}
-void ReminderEvents::broadcast(const std::string&) {}
-#endif

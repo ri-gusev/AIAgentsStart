@@ -1,5 +1,57 @@
 # C++ Agent Chat
 
+## Windows и Ubuntu Linux: один web backend
+
+HTTP routing и обработчики Agent/MCP/Reminder общие для обеих платформ. `socket_platform.h` изолирует socket type, закрытие, recv/send, ошибки, timeouts, select и nonblocking mode. Windows использует Winsock и слушает только `127.0.0.1:8080`; Linux использует POSIX sockets и слушает `0.0.0.0:8080`. MCP-server по-прежнему локальный: `http://127.0.0.1:8000/mcp` — browser не обращается к нему напрямую.
+
+WebSocket-события Reminder поддерживаются на обеих платформах. На Linux Origin проверяется относительно HTTP Host, поэтому UI можно открыть по IP/DNS VPS. Для SHA-1/base64 handshake добавлен маленький dependency-free helper (только handshake, не криптография для авторизации); Windows сохраняет существующий системный crypto helper. POSIX send использует MSG_NOSIGNAL, timeout — timeval, nonblocking — fcntl. SIGINT/SIGTERM останавливают Scheduler и WebSocket worker перед завершением. Новых внешних библиотек, Docker/nginx/systemd/HTTPS нет.
+
+### Ubuntu 24.04: сборка и запуск
+
+Из корня клонированного проекта установите **существующие** зависимости сборки (curl/SQLite/threads) и Python для MCP:
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake libcurl4-openssl-dev libsqlite3-dev python3 python3-venv
+cp -n agent_config.example.json agent_config.local.json
+cmake -S . -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+python3 -m venv .venv-mcp
+.venv-mcp/bin/python -m pip install -r mcp_server/requirements.txt
+```
+
+Если каталог `build` был перенесён с Windows, используйте чистый Linux build directory: старый CMakeCache с Windows paths/generator не совместим. `cp -n` не перезаписывает существующий локальный конфиг.
+
+Терминал 1, из корня проекта:
+
+```bash
+.venv-mcp/bin/python mcp_server/server.py
+```
+
+Терминал 2, также из корня проекта:
+
+```bash
+read -rsp 'OPENAI_API_KEY: ' OPENAI_API_KEY
+echo
+export OPENAI_API_KEY
+export MCP_SERVER_URL='http://127.0.0.1:8000/mcp'
+./build/openai_cli
+```
+
+Откройте `http://<IP-VPS>:8080`. MCP Connect, создание и удаление reminders работают через прежние backend endpoints. Windows-команды ниже остаются действительными. MCP порт 8000 остаётся loopback-only; открывать его наружу не нужно.
+
+Важно: backend не имеет авторизации и теперь доступен извне на Linux. В рамках этой задачи не добавляются защита доступа, firewall rules или HTTPS; не используйте его как защищённый публичный сервис. Browser Notifications API требует secure context: на обычном `http://<IP-VPS>:8080` системный toast может быть недоступен, но разовые WebSocket-уведомления **внутри UI** работают. Это ограничение браузера, а не Scheduler.
+
+Регрессионный интеграционный тест на Ubuntu (8080/18000 должны быть свободны):
+
+```bash
+.venv-mcp/bin/python tests/test_reminder_store.py
+.venv-mcp/bin/python tests/day18_integration.py
+```
+
+Тест использует временные базы внутри `build`, placeholder API key и не вызывает OpenAI. На Linux дополнительно проверяет bind `0.0.0.0:8080`, внешний Host/Origin для WebSocket и корректное завершение через SIGTERM. Для другой build-папки: `--executable /absolute/path/to/openai_cli`. TCP/HTTP и portable handshake тесты входят в CTest.
+
 ## Day 18 — MCP Reminder и фоновый Scheduler
 
 `create_reminder(text, run_at)` добавлен в существующий Python MCP-server. Tool валидирует текст и будущую дату, записывает `pending` в отдельный `reminders.db` и сразу возвращает `id`, `text`, `run_at`, `status`. `add`, `echo`, `get_todo` сохранены; LLM не выбирает инструменты.
@@ -106,7 +158,7 @@ Open this folder in VS Code and press **F5** with the `OpenAI Web Chat (CMake)` 
 - output policy проверяет и при необходимости исправляет ответ отдельным LLM-вызовом;
 - отображаются токены и оценка стоимости, включая отдельную статистику summarization;
 - сообщения прокручиваются внутри чата, строка ввода остаётся внизу;
-- локальный HTTP-сервер слушает `127.0.0.1:8080`.
+- HTTP-сервер слушает `127.0.0.1:8080` на Windows и `0.0.0.0:8080` на Linux.
 
 ## Архитектура
 
@@ -138,6 +190,7 @@ flowchart LR
 | `reminders.js` | Reminder-форма, realtime UI и Browser Notifications |
 | `memory_store.h`, `memory_store.cpp` | SQLite: общие долговременные факты, рабочая память чатов, названия и настройки |
 | `web_server.h`, `web_server.cpp` | Локальные HTTP-маршруты и выдача статических файлов |
+| `socket_platform.h`, `websocket_handshake.h` | Winsock/POSIX wrappers и portable WebSocket handshake без новых библиотек |
 | `index.html`, `styles.css`, `app.js` | Веб-интерфейс |
 | `agent_config.local.json` | Локальная конфигурация, исключённая из Git |
 | `agent_config.example.json` | Безопасный шаблон конфигурации для клонирования репозитория |
@@ -427,7 +480,7 @@ g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\mcp_client_tests.cpp -o build\m
 
 ## Локальный HTTP API
 
-Все POST-запросы используют `Content-Type: application/json`. Успех возвращает состояние Agent в JSON; ошибка содержит `error` и, для API-маршрутов, состояние. Невалидный ввод возвращает HTTP 400; ошибка генерации ответа — HTTP 500. Веб-сервер локальный и не содержит авторизации.
+Все POST-запросы используют `Content-Type: application/json`. Успех возвращает состояние Agent в JSON; ошибка содержит `error` и, для API-маршрутов, состояние. Невалидный ввод возвращает HTTP 400; ошибка генерации ответа — HTTP 500. Веб-сервер не содержит авторизации: Windows bind локальный, Linux bind доступен на всех IPv4 interfaces.
 
 | Метод и маршрут | JSON-тело | Действие |
 | --- | --- | --- |
@@ -485,4 +538,4 @@ GET /api/state
 - Если порт `8080` занят, проверьте, не запущен ли старый сервер. Изменения исходников не применяются к уже запущенному executable.
 - Ошибка `Permission denied` при сборке `main.exe` обычно означает, что executable ещё работает: остановите его перед повторной сборкой.
 - Если интерфейс показывает старые элементы, перезапустите обновлённый сервер и выполните `Ctrl+F5`.
-- API-ключ остаётся только на стороне C++ и не передаётся браузеру. Веб-сервер предназначен для локального использования, а не для публикации в интернете.
+- API-ключ остаётся только на стороне C++ и не передаётся браузеру. На Windows сервер доступен только локально; на Linux слушает все IPv4-интерфейсы. Авторизации нет: публичный доступ к порту 8080 открывает доступ к общему Agent и его API; без дополнительной защиты это не production-сервис.

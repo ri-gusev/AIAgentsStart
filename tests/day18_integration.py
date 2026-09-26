@@ -34,12 +34,12 @@ def request(path, body=None):
 
 
 class EventConnection:
-    def __init__(self):
+    def __init__(self, host="127.0.0.1:8080"):
         self.socket = socket.create_connection(("127.0.0.1", 8080), timeout=8)
         self.buffer = b""
         key = base64.b64encode(os.urandom(16)).decode()
-        self.socket.sendall(("GET /api/reminders/events HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n"
-            "Origin: http://127.0.0.1:8080\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+        self.socket.sendall(("GET /api/reminders/events HTTP/1.1\r\nHost: " + host + "\r\n"
+            "Origin: http://" + host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
             "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: " + key + "\r\n\r\n").encode())
         while b"\r\n\r\n" not in self.buffer:
             self.buffer += self.socket.recv(4096)
@@ -96,11 +96,14 @@ def stop(process):
     if process is not None and process.poll() is None:
         process.terminate()
         process.wait(timeout=10)
+        if os.name != "nt" and process.returncode != 0:
+            raise RuntimeError("Process did not shut down gracefully on SIGTERM")
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--serve", action="store_true")
+    parser.add_argument("--executable", type=Path, help="Override the backend executable for an alternate CMake build directory")
     args = parser.parse_args()
     # Refuse to interfere with an existing user app or MCP process.
     for port in (8080, 18000):
@@ -117,17 +120,26 @@ def main():
     env["OPENAI_API_KEY"] = "day18-local-test-placeholder"
     env["REMINDERS_DB"] = str(folder / "reminders.db")
     env["MCP_SERVER_URL"] = "http://127.0.0.1:18000/mcp"
-    env["PATH"] = "C:/msys64/ucrt64/bin;" + env.get("PATH", "")
+    if os.name == "nt":
+        env["PATH"] = "C:/msys64/ucrt64/bin;" + env.get("PATH", "")
     server_code = "import sys;sys.path.insert(0," + repr(str(ROOT)) + ");from mcp_server.server import mcp;mcp.settings.port=18000;mcp.run(transport='streamable-http')"
     mcp_process = subprocess.Popen([sys.executable, "-c", server_code], cwd=folder, env=env,
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     backend = None
     events = None
     try:
-        executable = ROOT / "build/mingw-debug/openai_cli.exe"
+        executable = args.executable.resolve() if args.executable else ROOT / (
+            "build/mingw-debug/openai_cli.exe" if os.name == "nt" else "build/openai_cli")
         backend = subprocess.Popen([str(executable)], cwd=folder, env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         wait_backend(backend)
+        for path, content_type in (("/", "text/html"), ("/app.js", "application/javascript"),
+                                   ("/reminders.js", "application/javascript"), ("/styles.css", "text/css")):
+            with urlopen("http://127.0.0.1:8080" + path, timeout=5) as response:
+                assert response.status == 200 and response.headers["Content-Type"].startswith(content_type)
+        if sys.platform.startswith("linux"):
+            listeners = Path("/proc/net/tcp").read_text().splitlines()[1:]
+            assert any(line.split()[1] == "00000000:1F90" and line.split()[3] == "0A" for line in listeners), "Linux must listen on 0.0.0.0:8080"
         connected = False
         for _ in range(30):
             status, state = request("/api/mcp/connect", {})
@@ -145,7 +157,7 @@ def main():
         if args.serve:
             while True:
                 time.sleep(1)
-        events = EventConnection()
+        events = EventConnection("203.0.113.7:8080" if sys.platform.startswith("linux") else "127.0.0.1:8080")
         assert events.receive()["type"] == "snapshot"
         status, created = request("/api/reminders", {
             "text": "Пойти на тренировку (integration)",
