@@ -2,13 +2,14 @@ const reminderForm = document.querySelector('#reminderForm');
 const reminderText = document.querySelector('#reminderText');
 const reminderRunAt = document.querySelector('#reminderRunAt');
 const createReminderButton = document.querySelector('#createReminderButton');
-const reminderList = document.querySelector('#reminderList');
-const reminderNotifications = document.querySelector('#reminderNotifications');
 const reminderError = document.querySelector('#reminderError');
 const reminderHint = document.querySelector('#reminderHint');
 const reminderConnection = document.querySelector('#reminderConnection');
 const reminderPermission = document.querySelector('#reminderNotificationPermission');
 const enableReminderNotifications = document.querySelector('#enableReminderNotifications');
+const reminderList = document.querySelector('#mcpCallLog');
+const reminderListToggle = document.querySelector('#mcpCallsToggle');
+const reminderListError = document.querySelector('#reminderListError');
 const reminderMoscowClock = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit',
   hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
@@ -17,6 +18,8 @@ const reminderMoscowDisplay = new Intl.DateTimeFormat('ru-RU', {
   timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit',
   hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
 });
+let currentReminderItems = [];
+const reminderDeletingIds = new Set();
 let reminderPending = false;
 let reminderStreamConnected = false;
 let reminderStateInitialized = false;
@@ -25,8 +28,6 @@ let reminderSocket;
 let reminderClosing = false;
 const seenReminderNotifications = new Set();
 let reminderPermissionAsked = false;
-let reminderToastTimer;
-const reminderDeletingIds = new Set();
 try { reminderPermissionAsked = localStorage.getItem('reminder.permission.requested') === '1'; } catch {}
 
 function setReminderOffset(minutes) {
@@ -57,8 +58,8 @@ function updateReminderPermission() {
   enableReminderNotifications.hidden = permission !== 'default';
   enableReminderNotifications.disabled = reminderPermissionAsked;
   reminderPermission.textContent = permission === 'granted' ? 'Системные уведомления разрешены.' :
-    permission === 'denied' ? 'Разрешите уведомления в настройках сайта. Внутри UI они появятся.' :
-    permission === 'unsupported' ? 'Системные уведомления недоступны в этом браузере. Используйте локальный desktop-браузер.' :
+    permission === 'denied' ? 'Разрешите уведомления в настройках сайта.' :
+    permission === 'unsupported' ? 'Системные уведомления недоступны в этом браузере или контексте.' :
     reminderPermissionAsked ? 'Запрос уже показан. Разрешение можно изменить в настройках сайта.' :
     'Разрешение будет запрошено один раз при создании напоминания.';
 }
@@ -79,30 +80,30 @@ function displayReminderTime(value) {
   return Number.isNaN(moment.getTime()) ? String(value || '') : reminderMoscowDisplay.format(moment) + ' МСК';
 }
 
-function renderReminderState(data) {
-  const error = typeof data.error === 'string' ? data.error : '';
-  reminderError.textContent = error;
-  reminderError.hidden = !error;
+function renderReminderList(reminders) {
+  currentReminderItems = reminders.filter((item) => item.status === 'pending');
+  reminderListToggle.textContent = 'Напоминания (' + currentReminderItems.length + ')';
   reminderList.replaceChildren();
-  const reminders = Array.isArray(data.reminders) ? data.reminders.filter((item) => item.status === 'pending') : [];
-  if (!reminders.length) reminderList.textContent = 'Нет запланированных напоминаний.';
-  reminders.forEach((reminder) => {
+  if (!currentReminderItems.length) reminderList.textContent = 'Нет запланированных напоминаний.';
+  currentReminderItems.forEach((reminder) => {
     const item = document.createElement('article');
-    item.className = 'reminder-item';
-    item.dataset.status = String(reminder.status);
+    item.className = 'mcp-call';
+    const copy = document.createElement('div');
+    copy.className = 'mcp-call-copy';
     const text = document.createElement('strong');
     text.textContent = String(reminder.text);
-    const details = document.createElement('small');
-    details.textContent = displayReminderTime(reminder.run_at) + ' · ' + String(reminder.status);
+    const time = document.createElement('small');
+    time.textContent = displayReminderTime(reminder.run_at);
+    copy.append(text, time);
     const remove = document.createElement('button');
     remove.type = 'button';
-    remove.className = 'secondary-button reminder-delete';
-    remove.dataset.reminderId = String(reminder.id);
+    remove.className = 'danger-button reminder-delete';
     remove.textContent = 'Удалить';
+    remove.dataset.reminderId = String(reminder.id);
     remove.setAttribute('aria-label', 'Удалить напоминание: ' + String(reminder.text));
     remove.disabled = reminderDeletingIds.has(String(reminder.id));
     remove.addEventListener('click', () => deleteReminder(reminder.id, remove));
-    item.append(text, details, remove);
+    item.append(copy, remove);
     reminderList.append(item);
   });
 }
@@ -112,19 +113,26 @@ async function deleteReminder(id, button) {
   if (reminderDeletingIds.has(key)) return;
   reminderDeletingIds.add(key);
   button.disabled = true;
+  reminderListError.textContent = '';
+  reminderListError.hidden = true;
   try {
     const response = await fetch('/api/reminders/delete', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: key })
     });
     const data = await response.json();
-    reminderError.textContent = typeof data.error === 'string' ? data.error : '';
-    reminderError.hidden = !reminderError.textContent;
-    // Successful list updates arrive via WebSocket. A slower HTTP response
-    // must not restore a reminder already removed by a scheduler event.
+    if (!response.ok) {
+      reminderListError.textContent = typeof data.error === 'string' && data.error
+        ? data.error : 'Не удалось удалить напоминание.';
+      reminderListError.hidden = false;
+    } else {
+      // Remove only the confirmed ID from the latest UI state. A late HTTP
+      // snapshot must not restore items removed by another delete/event.
+      renderReminderList(currentReminderItems.filter((item) => String(item.id) !== key));
+    }
   } catch {
-    reminderError.textContent = 'Не удалось удалить напоминание. Проверьте backend.';
-    reminderError.hidden = false;
+    reminderListError.textContent = 'Не удалось удалить напоминание. Проверьте backend.';
+    reminderListError.hidden = false;
   } finally {
     reminderDeletingIds.delete(key);
     button.disabled = false;
@@ -134,31 +142,13 @@ async function deleteReminder(id, button) {
   }
 }
 
-function showReminderNotifications(notifications) {
-  clearTimeout(reminderToastTimer);
-  reminderNotifications.replaceChildren();
-  notifications.forEach((notification) => {
-    const item = document.createElement('article');
-    item.className = 'reminder-item';
-    const text = document.createElement('strong');
-    text.textContent = '🔔 ' + String(notification.text);
-    const time = document.createElement('small');
-    time.textContent = displayReminderTime(notification.triggered_at);
-    item.append(text, time);
-    reminderNotifications.append(item);
-  });
-  // A short-lived message is not a completed-reminder history.
-  reminderToastTimer = setTimeout(() => {
-    reminderNotifications.replaceChildren();
-    reminderNotifications.textContent = 'Новых уведомлений нет.';
-  }, 15000);
-}
-
 function applyReminderEvent(data) {
-  renderReminderState(data);
+  const error = typeof data.error === 'string' ? data.error : '';
+  reminderError.textContent = error;
+  reminderError.hidden = !error;
+  if (Array.isArray(data.reminders)) renderReminderList(data.reminders);
   const notifications = data.type === 'snapshot' || !Array.isArray(data.notifications) ? [] :
     data.notifications.filter((notification) => !seenReminderNotifications.has(String(notification.id)));
-  if (notifications.length) showReminderNotifications(notifications);
   notifications.forEach((notification) => {
     const id = String(notification.id);
     seenReminderNotifications.add(id);
@@ -168,8 +158,8 @@ function applyReminderEvent(data) {
         body: String(notification.text), tag: 'reminder-' + String(notification.reminder_id)
       });
       toast.onclick = () => { window.focus(); };
-      toast.onerror = () => { reminderPermission.textContent = 'Браузер не смог показать системное уведомление. Оно доступно внутри UI.'; };
-    } catch { reminderPermission.textContent = 'Системное уведомление недоступно. Оно доступно внутри UI.'; }
+      toast.onerror = () => { reminderPermission.textContent = 'Браузер не смог показать системное уведомление. Проверьте разрешение уведомлений.'; };
+    } catch { reminderPermission.textContent = 'Системное уведомление недоступно. Проверьте настройки браузера.'; }
   });
   reminderStateInitialized = true;
   updateReminderControls();

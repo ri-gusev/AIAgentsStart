@@ -53,6 +53,9 @@ const mcpError = document.querySelector('#mcpError');
 const mcpTools = document.querySelector('#mcpTools');
 const mcpToolsToggle = document.querySelector('#mcpToolsToggle');
 const mcpCallLog = document.querySelector('#mcpCallLog');
+const mcpCallsToggle = document.querySelector('#mcpCallsToggle');
+const reminderToolPanel = document.querySelector('#reminderToolPanel');
+const reminderToolHome = reminderToolPanel.parentElement;
 
 const TASK_PHASES = ['PLANNING', 'EXECUTION', 'VALIDATION', 'DONE'];
 const TASK_STATES = [...TASK_PHASES, 'PAUSED'];
@@ -132,6 +135,12 @@ function makeToolArgumentField(name, definition, required) {
 }
 
 function renderMcpState(data = {}) {
+  const expandedTools = new Set(Array.from(mcpTools.querySelectorAll('.mcp-tool'))
+    .filter((item) => item.open).map((item) => item.dataset.toolName));
+  // Move the existing UI, rather than clone/recreate it: form values, event
+  // listeners and form values survive tools refreshes.
+  reminderToolHome.append(reminderToolPanel);
+  reminderToolPanel.hidden = true;
   currentMcpTools = Array.isArray(data.tools) ? data.tools : [];
   currentMcpStatus = ['Connected', 'Disconnected', 'Error'].includes(data.status)
     ? data.status : 'Error';
@@ -152,6 +161,8 @@ function renderMcpState(data = {}) {
     data.tools.forEach((tool) => {
       const item = document.createElement('details');
       item.className = 'mcp-tool';
+      item.dataset.toolName = String(tool.name || '');
+      item.open = expandedTools.has(item.dataset.toolName);
       const summary = document.createElement('summary');
       const signature = document.createElement('strong');
       signature.textContent = String(tool.name || '') + mcpArgumentSummary(tool.inputSchema);
@@ -159,6 +170,12 @@ function renderMcpState(data = {}) {
       description.textContent = typeof tool.description === 'string' ? tool.description : '';
       summary.append(signature);
       item.append(summary, description);
+      if (tool.name === 'create_reminder') {
+        reminderToolPanel.hidden = false;
+        item.append(reminderToolPanel);
+        mcpTools.append(item);
+        return;
+      }
       const form = document.createElement('form');
       form.className = 'mcp-tool-form';
       const schema = tool.inputSchema && typeof tool.inputSchema === 'object' ? tool.inputSchema : {};
@@ -193,43 +210,7 @@ function renderMcpState(data = {}) {
       mcpTools.append(item);
     });
   }
-  renderMcpCalls(data.calls);
   updateMcpControls();
-}
-
-function renderMcpCalls(calls) {
-  mcpCallLog.replaceChildren();
-  if (!Array.isArray(calls) || calls.length === 0) {
-    mcpCallLog.textContent = 'No tool calls yet.';
-    return;
-  }
-  calls.forEach((call) => {
-    const item = document.createElement('article');
-    item.className = 'mcp-call';
-    const header = document.createElement('div');
-    header.className = 'mcp-call-header';
-    const name = document.createElement('strong');
-    name.textContent = String(call.name || 'Unknown tool');
-    const status = document.createElement('span');
-    status.className = 'mcp-call-status' + (call.success === true ? '' : ' error');
-    status.textContent = call.success === true ? 'Success' : 'Error';
-    header.append(name, status);
-    const args = document.createElement('pre');
-    args.textContent = typeof call.arguments === 'string' ? call.arguments : '{}';
-    item.append(header, args);
-    if (call.result !== null && call.result !== undefined) {
-      const result = document.createElement('pre');
-      result.textContent = JSON.stringify(call.result, null, 2);
-      item.append(result);
-    }
-    if (call.success !== true && typeof call.error === 'string' && call.error) {
-      const error = document.createElement('p');
-      error.className = 'mcp-call-error';
-      error.textContent = call.error;
-      item.append(error);
-    }
-    mcpCallLog.append(item);
-  });
 }
 
 async function runMcpTool(name, args, button) {
@@ -814,6 +795,11 @@ mcpToolsToggle.addEventListener('click', () => {
   const expanded = mcpToolsToggle.getAttribute('aria-expanded') === 'true';
   mcpToolsToggle.setAttribute('aria-expanded', String(!expanded));
   mcpTools.hidden = expanded;
+});
+mcpCallsToggle.addEventListener('click', () => {
+  const expanded = mcpCallsToggle.getAttribute('aria-expanded') === 'true';
+  mcpCallsToggle.setAttribute('aria-expanded', String(!expanded));
+  mcpCallLog.hidden = expanded;
 });
 mcpConnectButton.addEventListener('click', () => requestMcp('/api/mcp/connect', 'POST'));
 mcpDisconnectButton.addEventListener('click', () => requestMcp('/api/mcp/disconnect', 'POST'));
