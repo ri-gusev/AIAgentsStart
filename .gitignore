@@ -13,3 +13,7 @@ agent_memory.db-wal
 reminders.db
 reminders.db-shm
 reminders.db-wal
+codeforces_state.db
+codeforces_state.db-shm
+codeforces_state.db-wal
+codeforces_state.db-journal
