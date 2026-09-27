@@ -184,6 +184,19 @@ textarea::placeholder, input::placeholder { color: #929ab3; }
 .reminder-form input { width: 100%; min-width: 0; padding: 8px; background: #fff; color: var(--ink); border: 1px solid #c6cdeb; border-radius: 8px; font: inherit; }
 .reminder-hint { font-size: 10px !important; line-height: 1.4; color: var(--muted); }
 .reminder-stream-status { color: var(--muted); font-size: 9px; }
+.reminder-overview { margin-top: 12px; }
+.reminder-overview[hidden] { display: none; }
+.reminder-overview h4 { margin: 0; color: var(--ink); font-size: 12px; }
+.reminder-overview > button { width: 100%; font-size: 11px; }
+.reminder-overview-result { margin-top: 10px; padding-top: 10px; border-top: 1px solid #c6cdeb; }
+.reminder-overview-result[hidden] { display: none; }
+.reminder-overview-result h5 { margin: 0; color: var(--green); font-size: 12px; }
+.reminder-overview-result p { font-size: 11px; line-height: 1.5; }
+.reminder-overview-item { padding: 8px 0; }
+.reminder-overview-item + .reminder-overview-item { border-top: 1px solid #e5e8f2; }
+.reminder-overview-item strong, .reminder-overview-item small { display: block; overflow-wrap: anywhere; }
+.reminder-overview-item strong { color: var(--ink); font-size: 11px; }
+.reminder-overview-item small { margin-top: 3px; color: var(--muted); font-size: 10px; }
 .memory-stats { margin: 0; display: grid; gap: 9px; }
 .memory-stats dt { color: var(--muted); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
 .memory-stats dd { margin: 3px 0 0; color: var(--ink); font-size: 11px; font-weight: 700; overflow-wrap: anywhere; }

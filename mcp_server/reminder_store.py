@@ -27,6 +27,22 @@ class ReminderStore:
         db.execute("PRAGMA foreign_keys = ON")
         return db
 
+    def upcoming(self, days: int = 30) -> dict:
+        if type(days) is not int or days < 1:
+            raise ValueError("days must be a positive integer")
+        now = int(time.time())
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT id, text, run_at, status FROM reminders "
+                "WHERE status = 'pending' AND run_at > ? AND run_at <= ? "
+                "ORDER BY run_at ASC, id ASC", (now, now + days * 86400),
+            ).fetchall()
+        return {"range_days": days, "reminders": [
+            {"id": row[0], "text": row[1],
+             "run_at": datetime.fromtimestamp(row[2], timezone.utc).isoformat().replace("+00:00", "Z"),
+             "status": row[3]} for row in rows
+        ]}
+
     def create(self, text: str, run_at: str) -> dict:
         if not isinstance(text, str) or not text.strip() or len(text.strip()) > 2000:
             raise ValueError("Reminder text must contain 1 to 2000 characters")

@@ -143,6 +143,8 @@ module.exports = (async () => {
   assert.deepEqual(requests, [{url:'/api/reminders',body:{text:'Browser-only reminder',run_at:'2026-09-26T15:02:00.000Z'}}]);
   assert.equal(mcpStates.length, 1, 'MCP connection state is updated after creation');
   assert.equal(element('#reminderText').value, '');
+  assert.equal(element('#reminderCreateStatus').hidden, false);
+  assert.equal(element('#reminderCreateStatus').textContent, 'Напоминание создано.');
   assert.equal(element('#createReminderButton').disabled, false);
 
   element('#reminderRunAt').value = '2000-01-01T00:00:00';
@@ -154,6 +156,7 @@ module.exports = (async () => {
   context.fetch = async () => { throw new Error('Offline'); };
   await submit({preventDefault() {}});
   assert.match(element('#reminderError').textContent, /Backend недоступен/);
+  assert.equal(element('#reminderCreateStatus').hidden, true);
   assert.equal(element('#createReminderButton').disabled, false, 'Controls recover after network error');
 
   context.currentMcpStatus = 'Disconnected';
@@ -200,6 +203,87 @@ module.exports = (async () => {
   await element('#mcpCallLog').children[0].children[1].listeners.click();
   assert.equal(element('#mcpCallLog').children[0].children[1].disabled, false);
   assert.match(element('#reminderListError').textContent, /Проверьте backend/);
-  return 'PASS: collapsed pending list, MSK time, delete/error/race handling, creation and browser-only notifications';
+  context.currentMcpStatus = 'Connected';
+  context.currentMcpTools = ['create_reminder', 'get_upcoming_reminders', 'summarize_reminders', 'build_reminder_view'].map((name) => ({name}));
+  vm.runInContext('updateReminderOverviewControls()', context);
+  const overviewButton = element('#reminderOverviewButton');
+  assert.equal(overviewButton.disabled, false);
+  const beforeList = element('#mcpCallLog').children;
+  let finishOverview;
+  context.fetch = (url) => {
+    assert.equal(url, '/api/reminders/overview');
+    return new Promise((resolve) => { finishOverview = resolve; });
+  };
+  const overviewRequest = overviewButton.listeners.click();
+  assert.equal(overviewButton.disabled, true);
+  assert.equal(overviewButton.textContent, 'Получение сводки…');
+  assert.equal(element('#reminderOverviewResult').getAttribute('aria-busy'), 'true');
+  await overviewButton.listeners.click();
+  finishOverview({ok:true,json:async () => ({success:true,steps:['private'],result:{
+    title:'Ближайшие планы',count:1,items:[{id:44,title:'<img src=x onerror=alert(1)>',date:'27.09.2026',time:'16:00'}]
+  }})});
+  await overviewRequest;
+  assert.equal(overviewButton.disabled, false);
+  const overview = element('#reminderOverviewResult');
+  assert.equal(overview.hidden, false);
+  assert.equal(overview.children[1].textContent, 'У вас 1 напоминание на ближайшие 24 часа');
+  assert.equal(overview.children[2].children[0].textContent, '<img src=x onerror=alert(1)>');
+  assert.equal(overview.children[2].children[1].textContent, '27.09.2026 · 16:00 МСК');
+  assert.equal(element('#mcpCallLog').children, beforeList, 'Overview must not replace the management list');
+  context.fetch = async () => ({ok:true,json:async () => ({success:true,result:{title:'Ближайшие планы',count:0,items:[]}})});
+  await overviewButton.listeners.click();
+  assert.equal(overview.children[1].textContent, 'На ближайшие 24 часа напоминаний нет.');
+  for (const response of [
+    {ok:false,json:async () => ({success:false,failed_step:'private',error:'internal JSON'})},
+    {ok:true,json:async () => ({success:true,result:{count:2,items:[]}})}
+  ]) {
+    context.fetch = async () => response;
+    await overviewButton.listeners.click();
+    assert.equal(element('#reminderOverviewError').hidden, false);
+    assert.ok(!element('#reminderOverviewError').textContent.includes('private'));
+    assert.equal(overview.hidden, true);
+    assert.equal(overviewButton.disabled, false);
+  }
+  context.fetch = async () => { throw new Error('Offline'); };
+  await overviewButton.listeners.click();
+  assert.equal(element('#reminderOverviewError').hidden, false);
+  context.currentMcpStatus = 'Disconnected';
+  vm.runInContext('updateReminderOverviewControls()', context);
+  assert.equal(overviewButton.disabled, true);
+  // Run the actual MCP renderer: the orchestrator is the second entry inside
+  // Available tools, never a new SDK tool or a generic tools/call form.
+  for (const name of ['mcpTools', 'mcpStatus', 'mcpServerName', 'mcpServerUrl', 'mcpError', 'mcpToolsToggle', 'reminderToolPanel', 'reminderOverviewPanel']) {
+    context[name] = element('#' + name);
+  }
+  context.reminderToolHome = makeElement();
+  context.reminderOverviewHome = makeElement();
+  context.reminderPipelineTools = ['get_upcoming_reminders', 'summarize_reminders', 'build_reminder_view'];
+  context.mcpArgumentSummary = () => '()';
+  context.mcpTools.querySelectorAll = () => context.mcpTools.children;
+  const renderStart = appSource.indexOf('function renderMcpState(');
+  vm.runInContext(appSource.slice(renderStart, appSource.indexOf('async function runMcpTool', renderStart)), context);
+  const tools = ['create_reminder', ...context.reminderPipelineTools].map((name) => ({name}));
+  context.renderMcpState({status:'Connected', tools});
+  assert.equal(element('#mcpToolsToggle').textContent, 'Available tools (2)');
+  assert.deepEqual(context.mcpTools.children.map((item) => item.dataset.toolName), ['create_reminder', 'reminder_overview']);
+  assert.equal(context.mcpTools.children[0].children[0].children[0].textContent, 'Create Reminder');
+  const workflow = context.mcpTools.children[1];
+  assert.equal(workflow.children[0].children[0].textContent, 'Reminder Overview');
+  assert.ok(workflow.children.includes(context.reminderOverviewPanel));
+  assert.ok(!workflow.children.some((item) => item.tagName === 'form'), 'Orchestrator must not use generic MCP call form');
+  workflow.open = true;
+  context.renderMcpState({status:'Connected', tools});
+  assert.equal(context.mcpTools.children[1].open, true, 'Refresh must preserve expansion');
+  context.renderMcpState({status:'Disconnected', tools:[]});
+  assert.equal(context.reminderOverviewPanel.hidden, true);
+  assert.equal(element('#mcpToolsToggle').textContent, 'Available tools (0)');
+  context.renderMcpState({status:'Connected', tools:[{name:'create_reminder'}]});
+  vm.runInContext('updateReminderOverviewControls()', context);
+  assert.equal(element('#mcpToolsToggle').textContent, 'Available tools (2)', 'An old MCP server must not hide Overview');
+  assert.equal(context.mcpTools.children[1].dataset.toolName, 'reminder_overview');
+  assert.equal(context.reminderOverviewPanel.hidden, false);
+  assert.equal(overviewButton.disabled, true, 'Missing pipeline tools must disable execution');
+  assert.match(element('#reminderOverviewHint').textContent, /Перезапустите MCP-server/);
+  return 'PASS: reminder creation/deletion/notifications plus overview loading, success, MSK, empty/error/network states and safe text rendering';
 })();
 module.exports.then(console.log);

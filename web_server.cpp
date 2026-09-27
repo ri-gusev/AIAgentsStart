@@ -2,6 +2,7 @@
 
 #include "agent.h"
 #include "mcp_client.h"
+#include "reminder_pipeline.h"
 #include "reminder_store.h"
 #include "reminder_scheduler.h"
 #include "reminder_events.h"
@@ -502,6 +503,7 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
     ServerSignals signals;
     if (!signals.ready()) { net::closeSocket(server); return 1; }
     ReminderStore reminderStore;
+    ReminderPipeline reminderPipeline(mcpClient);
     ReminderEvents reminderEvents;
     std::mutex reminderEventMutex;
     const auto publishReminders = [&] {
@@ -556,6 +558,21 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
                 }
                 sendHttpResponse(client, 400, "application/json", "{\"error\":\"" + jsonEscape(error) + "\"}");
             }
+        } else if (request.method == "GET" && request.path == "/api/reminders/overview") {
+            const auto overview = reminderPipeline.run();
+            std::string body;
+            if (overview.success) {
+                body = "{\"success\":true,\"steps\":[";
+                for (std::size_t i = 0; i < overview.steps.size(); ++i) {
+                    if (i) body += ',';
+                    body += "\"" + jsonEscape(overview.steps[i]) + "\"";
+                }
+                body += "],\"result\":" + overview.resultJson + "}";
+            } else {
+                body = "{\"success\":false,\"failed_step\":\"" + jsonEscape(overview.failedStep) +
+                       "\",\"error\":\"" + jsonEscape(overview.error) + "\"}";
+            }
+            sendHttpResponse(client, overview.success ? 200 : 502, "application/json", body);
         } else if (request.method == "GET" && request.path == "/api/reminders") {
             sendHttpResponse(client, 200, "application/json", buildReminderStateJson(reminderStore));
         } else if (request.method == "POST" && request.path == "/api/reminders/delete") {

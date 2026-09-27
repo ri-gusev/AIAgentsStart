@@ -4,12 +4,85 @@ const reminderRunAt = document.querySelector('#reminderRunAt');
 const createReminderButton = document.querySelector('#createReminderButton');
 const reminderError = document.querySelector('#reminderError');
 const reminderHint = document.querySelector('#reminderHint');
+const reminderCreateStatus = document.querySelector('#reminderCreateStatus');
 const reminderConnection = document.querySelector('#reminderConnection');
 const reminderPermission = document.querySelector('#reminderNotificationPermission');
 const enableReminderNotifications = document.querySelector('#enableReminderNotifications');
 const reminderList = document.querySelector('#mcpCallLog');
 const reminderListToggle = document.querySelector('#mcpCallsToggle');
 const reminderListError = document.querySelector('#reminderListError');
+const reminderOverviewButton = document.querySelector('#reminderOverviewButton');
+const reminderOverviewHint = document.querySelector('#reminderOverviewHint');
+const reminderOverviewError = document.querySelector('#reminderOverviewError');
+const reminderOverviewResult = document.querySelector('#reminderOverviewResult');
+let reminderOverviewPending = false;
+
+function updateReminderOverviewControls() {
+  const available = currentMcpStatus === 'Connected' &&
+    ['get_upcoming_reminders', 'summarize_reminders', 'build_reminder_view']
+      .every((name) => currentMcpTools.some((tool) => tool.name === name));
+  reminderOverviewButton.disabled = reminderOverviewPending || mcpPending || !available;
+  reminderOverviewButton.textContent = reminderOverviewPending ? 'Получение сводки…' : 'Получить сводку';
+  reminderOverviewHint.textContent = reminderOverviewPending ? 'Собираем ближайшие планы…' :
+    currentMcpStatus !== 'Connected' ? 'Подключите MCP для получения сводки.' :
+    !available ? 'Перезапустите MCP-server и обновите список tools.' : 'Сводка обновляется по нажатию кнопки.';
+}
+
+function renderReminderOverview(view) {
+  if (!view || !Number.isInteger(view.count) || view.count < 0 || !Array.isArray(view.items) ||
+      view.items.length !== view.count || typeof view.title !== 'string' ||
+      view.items.some((item) => !item || typeof item.title !== 'string' ||
+        typeof item.date !== 'string' || typeof item.time !== 'string')) {
+    throw new Error('Invalid overview');
+  }
+  reminderOverviewResult.replaceChildren();
+  const title = document.createElement('h5');
+  title.textContent = '📅 ' + view.title;
+  const message = document.createElement('p');
+  message.textContent = view.count === 0 ? 'На ближайшие 24 часа напоминаний нет.' :
+    'У вас ' + view.count + ' ' + (view.count % 10 === 1 && view.count % 100 !== 11 ? 'напоминание' :
+      view.count % 10 >= 2 && view.count % 10 <= 4 && !(view.count % 100 >= 12 && view.count % 100 <= 14) ?
+      'напоминания' : 'напоминаний') + ' на ближайшие 24 часа';
+  reminderOverviewResult.append(title, message);
+  view.items.forEach((item) => {
+    const row = document.createElement('div');
+    row.className = 'reminder-overview-item';
+    const name = document.createElement('strong');
+    name.textContent = item.title;
+    const time = document.createElement('small');
+    // The presentation model already contains Moscow clock values: no local conversion.
+    time.textContent = item.date + ' · ' + item.time + ' МСК';
+    row.append(name, time);
+    reminderOverviewResult.append(row);
+  });
+  reminderOverviewResult.hidden = false;
+}
+
+reminderOverviewButton.addEventListener('click', async () => {
+  if (reminderOverviewButton.disabled || reminderOverviewPending) return;
+  reminderOverviewPending = true;
+  mcpPending = true;
+  reminderOverviewError.hidden = true;
+  reminderOverviewResult.hidden = true;
+  reminderOverviewResult.setAttribute('aria-busy', 'true');
+  updateMcpControls();
+  updateReminderOverviewControls();
+  try {
+    const response = await fetch('/api/reminders/overview');
+    const data = await response.json();
+    if (!response.ok || data.success !== true) throw new Error('Pipeline failed');
+    renderReminderOverview(data.result);
+  } catch {
+    reminderOverviewError.textContent = 'Не удалось получить сводку. Проверьте подключение MCP и попробуйте ещё раз.';
+    reminderOverviewError.hidden = false;
+  } finally {
+    reminderOverviewPending = false;
+    mcpPending = false;
+    reminderOverviewResult.setAttribute('aria-busy', 'false');
+    updateMcpControls();
+    updateReminderOverviewControls();
+  }
+});
 const reminderMoscowClock = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit',
   hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
@@ -192,6 +265,7 @@ function connectReminderEvents() {
 reminderForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (createReminderButton.disabled) return;
+  reminderCreateStatus.hidden = true;
   const moment = parseReminderMoscowTime(reminderRunAt.value);
   if (Number.isNaN(moment.getTime()) || moment.getTime() <= Date.now()) {
     reminderError.textContent = 'Выберите время в будущем (МСК).'; reminderError.hidden = false; return;
@@ -210,7 +284,12 @@ reminderForm.addEventListener('submit', async (event) => {
     if (data.mcp) renderMcpState(data.mcp);
     reminderError.textContent = typeof data.error === 'string' ? data.error : '';
     reminderError.hidden = !reminderError.textContent;
-    if (response.ok) { reminderText.value = ''; setReminderOffset(1); }
+    if (response.ok && !reminderError.textContent) {
+      reminderText.value = '';
+      setReminderOffset(1);
+      reminderCreateStatus.textContent = 'Напоминание создано.';
+      reminderCreateStatus.hidden = false;
+    }
   } catch {
     reminderError.textContent = 'Backend недоступен. Напоминание не подтверждено.';
     reminderError.hidden = false;
@@ -229,3 +308,4 @@ setReminderOffset(1);
 updateReminderPermission();
 updateReminderControls();
 connectReminderEvents();
+updateReminderOverviewControls();

@@ -1,5 +1,48 @@
 # C++ Agent Chat
 
+## Day 19 — композиция MCP reminders
+
+Новый `ReminderPipeline` находится в `reminder_pipeline.h/.cpp` рядом с существующим `McpClient`, вне Agent. `GET /api/reminders/overview` выполняет ровно три последовательных `tools/call`:
+
+```text
+get_upcoming_reminders({days:30}) -> result1
+summarize_reminders({reminders:result1,hours:24}) -> result2
+build_reminder_view({summary:result2}) -> result3 -> HTTP JSON
+```
+
+Первый tool читает будущие pending из существующей `reminders.db` за 30 дней, сортирует по времени. Второй получает весь result1 через arguments и выбирает ближайшие 24 часа. Третий получает весь result2 через arguments и возвращает presentation model с московскими `date`/`time`, без HTML. Последние два tools не обращаются к SQLite. Summary/view существуют только в памяти запроса, не сохраняются. `create_reminder`, schema, Scheduler, WebSocket, Agent и frontend не изменены.
+
+Успех: HTTP 200, `{success:true,steps:[...],result:{title,count,message,items}}`. Ошибка: HTTP 502, `{success:false,failed_step,error}`; следующие шаги не вызываются. Перед запросом подключите MCP через существующую кнопку Connect или API. Без подключения ошибка указывает на `get_upcoming_reminders`.
+
+После пересборки backend и перезапуска MCP-server проверьте из PowerShell:
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8080/api/mcp/connect -ContentType application/json -Body '{}'
+Invoke-RestMethod http://127.0.0.1:8080/api/reminders/overview | ConvertTo-Json -Depth 12
+```
+
+На Ubuntu:
+
+```bash
+curl -X POST -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:8080/api/mcp/connect
+curl http://127.0.0.1:8080/api/reminders/overview
+```
+
+Тесты (MCP Python environment, свободные порты 8080/18019; тест запускает собственные процессы и использует временную базу):
+
+```powershell
+.\.venv-mcp\Scripts\python.exe tests\test_reminder_composition.py
+.\.venv-mcp\Scripts\python.exe tests\day19_integration.py
+```
+
+На Ubuntu используйте `.venv-mcp/bin/python` вместо Windows-пути. `reminder_mcp_pipeline` входит в CTest при `BUILD_TESTING=ON`. Интеграционный тест проверяет SDK discovery всех четырёх tools, три реальных MCP-вызова из одного HTTP-запроса, передачу JSON arguments, московское время, пустой результат, создание reminder и остановку при ошибке каждого этапа.
+
+Если Windows-venv ссылается на удалённую установку Python, но зависимости есть в `.venv-mcp-run/Lib/site-packages`, запуск без изменения окружения:
+
+```powershell
+py -3.11 -s -c "import site,runpy;site.addsitedir(r'.venv-mcp-run\Lib\site-packages');runpy.run_module('mcp_server.server',run_name='__main__')"
+```
+
 ## Windows и Ubuntu Linux: один web backend
 
 HTTP routing и обработчики Agent/MCP/Reminder общие для обеих платформ. `socket_platform.h` изолирует socket type, закрытие, recv/send, ошибки, timeouts, select и nonblocking mode. Windows использует Winsock и слушает только `127.0.0.1:8080`; Linux использует POSIX sockets и слушает `0.0.0.0:8080`. MCP-server по-прежнему локальный: `http://127.0.0.1:8000/mcp` — browser не обращается к нему напрямую.
@@ -54,7 +97,7 @@ export MCP_SERVER_URL='http://127.0.0.1:8000/mcp'
 
 ## Day 18 — MCP Reminder и фоновый Scheduler
 
-`create_reminder(text, run_at)` — единственный tool существующего Python MCP-server. Tool валидирует текст и будущую дату, записывает `pending` в отдельный `reminders.db` и сразу возвращает `id`, `text`, `run_at`, `status`. Тестовые `add`, `echo`, `get_todo` удалены; LLM не выбирает инструменты.
+`create_reminder(text, run_at)` — tool создания напоминаний существующего Python MCP-server. Tool валидирует текст и будущую дату, записывает `pending` в отдельный `reminders.db` и сразу возвращает `id`, `text`, `run_at`, `status`. Тестовые `add`, `echo`, `get_todo` удалены; LLM не выбирает инструменты.
 
 ```text
 Reminder UI -> POST /api/reminders -> existing McpClient.tools/call
@@ -116,7 +159,7 @@ MCP добавлен отдельным слоем и не связан с memor
 Web UI -> web_server.cpp -> McpClient / libcurl -> Local Python MCP Server
 ```
 
-Локальный сервер `mcp_server/server.py` использует официальный Python MCP SDK и публикует только `create_reminder(text, run_at)`. Внешние mock REST API не используются. Сервер работает отдельным процессом на `http://127.0.0.1:8000/mcp` через Streamable HTTP. C++-клиент выполняет `initialize`, отправляет `notifications/initialized`, вызывает `tools/list` и сохраняет `name`, `description`, `inputSchema`.
+Локальный сервер `mcp_server/server.py` использует официальный Python MCP SDK и публикует `create_reminder(text, run_at)` и три tools композиции Day 19 (см. выше). Внешние mock REST API не используются. Сервер работает отдельным процессом на `http://127.0.0.1:8000/mcp` через Streamable HTTP. C++-клиент выполняет `initialize`, отправляет `notifications/initialized`, вызывает `tools/list` и сохраняет `name`, `description`, `inputSchema`.
 
 Web UI обращается только к C++ backend:
 

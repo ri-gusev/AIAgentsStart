@@ -133,6 +133,13 @@
           <p id="mcpError" class="mcp-error" role="status" hidden></p>
           <button id="mcpToolsToggle" class="mcp-tools-toggle" type="button" aria-expanded="false">Available tools</button>
           <div id="mcpTools" class="mcp-tools" aria-live="polite" hidden>Connect to discover tools.</div>
+          <div id="reminderOverviewPanel" class="reminder-overview" aria-label="Сводка напоминаний" hidden>
+            <p class="reminder-hint">Ближайшие 24 часа · МСК</p>
+            <button id="reminderOverviewButton" class="secondary-button" type="button" disabled>Получить сводку</button>
+            <p id="reminderOverviewHint" class="reminder-hint">Подключите MCP для получения сводки.</p>
+            <p id="reminderOverviewError" class="mcp-error" role="status" hidden></p>
+            <div id="reminderOverviewResult" class="reminder-overview-result" aria-live="polite" aria-busy="false" hidden></div>
+          </div>
           <button id="mcpCallsToggle" class="mcp-tools-toggle" type="button" aria-expanded="false" aria-controls="mcpCallLog">Напоминания (0)</button>
           <p id="reminderListError" class="mcp-error" role="status" hidden></p>
           <div id="mcpCallLog" class="mcp-call-log reminder-list" aria-live="polite" hidden>Подключение…</div>
@@ -149,6 +156,7 @@
                 <button id="createReminderButton" class="secondary-button" type="submit" disabled>Create Reminder</button>
               </form>
               <p id="reminderHint" class="reminder-hint">Подключите MCP для создания напоминания.</p>
+              <p id="reminderCreateStatus" class="reminder-hint" role="status" hidden></p>
               <p id="reminderError" class="mcp-error" role="status" hidden></p>
               <div class="mcp-tools-heading">Браузерные уведомления</div>
               <button id="enableReminderNotifications" class="secondary-button" type="button">Разрешить уведомления</button>

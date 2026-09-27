@@ -56,6 +56,9 @@ const mcpCallLog = document.querySelector('#mcpCallLog');
 const mcpCallsToggle = document.querySelector('#mcpCallsToggle');
 const reminderToolPanel = document.querySelector('#reminderToolPanel');
 const reminderToolHome = reminderToolPanel.parentElement;
+const reminderOverviewPanel = document.querySelector('#reminderOverviewPanel');
+const reminderOverviewHome = reminderOverviewPanel.parentElement;
+const reminderPipelineTools = ['get_upcoming_reminders', 'summarize_reminders', 'build_reminder_view'];
 
 const TASK_PHASES = ['PLANNING', 'EXECUTION', 'VALIDATION', 'DONE'];
 const TASK_STATES = [...TASK_PHASES, 'PAUSED'];
@@ -95,6 +98,7 @@ function updateMcpControls() {
     button.disabled = mcpPending || !connected;
   });
   if (typeof updateReminderControls === 'function') updateReminderControls();
+  if (typeof updateReminderOverviewControls === 'function') updateReminderOverviewControls();
 }
 
 function makeToolArgumentField(name, definition, required) {
@@ -141,6 +145,8 @@ function renderMcpState(data = {}) {
   // listeners and form values survive tools refreshes.
   reminderToolHome.append(reminderToolPanel);
   reminderToolPanel.hidden = true;
+  reminderOverviewHome.append(reminderOverviewPanel);
+  reminderOverviewPanel.hidden = true;
   currentMcpTools = Array.isArray(data.tools) ? data.tools : [];
   currentMcpStatus = ['Connected', 'Disconnected', 'Error'].includes(data.status)
     ? data.status : 'Error';
@@ -152,24 +158,41 @@ function renderMcpState(data = {}) {
   const error = typeof data.error === 'string' ? data.error : '';
   mcpError.textContent = error;
   mcpError.hidden = !error;
-  mcpToolsToggle.textContent = 'Available tools (' + (Array.isArray(data.tools) ? data.tools.length : 0) + ')';
+  const visibleTools = currentMcpTools.filter((tool) => !reminderPipelineTools.includes(tool.name));
+  const showOverview = currentMcpStatus === 'Connected' &&
+    (currentMcpTools.some((tool) => tool.name === 'create_reminder') ||
+     reminderPipelineTools.every((name) => currentMcpTools.some((tool) => tool.name === name)));
+  // This is a backend workflow, not an additional server-side MCP tool.
+  if (showOverview) {
+    const overview = { name: 'reminder_overview', description: 'Сводка ближайших планов за 24 часа.', workflow: true };
+    const createIndex = visibleTools.findIndex((tool) => tool.name === 'create_reminder');
+    visibleTools.splice(createIndex >= 0 ? createIndex + 1 : 0, 0, overview);
+  }
+  mcpToolsToggle.textContent = 'Available tools (' + visibleTools.length + ')';
   mcpTools.replaceChildren();
   if (!Array.isArray(data.tools) || !data.tools.length) {
     mcpTools.textContent = currentMcpStatus === 'Connected'
       ? 'No tools published.' : 'Connect to discover tools.';
   } else {
-    data.tools.forEach((tool) => {
+    visibleTools.forEach((tool) => {
       const item = document.createElement('details');
       item.className = 'mcp-tool';
       item.dataset.toolName = String(tool.name || '');
       item.open = expandedTools.has(item.dataset.toolName);
       const summary = document.createElement('summary');
       const signature = document.createElement('strong');
-      signature.textContent = String(tool.name || '') + mcpArgumentSummary(tool.inputSchema);
+      signature.textContent = tool.workflow ? 'Reminder Overview' : tool.name === 'create_reminder' ?
+        'Create Reminder' : String(tool.name || '') + mcpArgumentSummary(tool.inputSchema);
       const description = document.createElement('p');
       description.textContent = typeof tool.description === 'string' ? tool.description : '';
       summary.append(signature);
       item.append(summary, description);
+      if (tool.workflow) {
+        reminderOverviewPanel.hidden = false;
+        item.append(reminderOverviewPanel);
+        mcpTools.append(item);
+        return;
+      }
       if (tool.name === 'create_reminder') {
         reminderToolPanel.hidden = false;
         item.append(reminderToolPanel);
