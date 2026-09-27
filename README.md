@@ -54,7 +54,7 @@ export MCP_SERVER_URL='http://127.0.0.1:8000/mcp'
 
 ## Day 18 — MCP Reminder и фоновый Scheduler
 
-`create_reminder(text, run_at)` добавлен в существующий Python MCP-server. Tool валидирует текст и будущую дату, записывает `pending` в отдельный `reminders.db` и сразу возвращает `id`, `text`, `run_at`, `status`. `add`, `echo`, `get_todo` сохранены; LLM не выбирает инструменты.
+`create_reminder(text, run_at)` — единственный tool существующего Python MCP-server. Tool валидирует текст и будущую дату, записывает `pending` в отдельный `reminders.db` и сразу возвращает `id`, `text`, `run_at`, `status`. Тестовые `add`, `echo`, `get_todo` удалены; LLM не выбирает инструменты.
 
 ```text
 Reminder UI -> POST /api/reminders -> existing McpClient.tools/call
@@ -116,7 +116,7 @@ MCP добавлен отдельным слоем и не связан с memor
 Web UI -> web_server.cpp -> McpClient / libcurl -> Local Python MCP Server
 ```
 
-Локальный сервер `mcp_server/server.py` использует официальный Python MCP SDK и публикует `add(a, b)`, `echo(text)` и `get_todo(id)`. Последний получает задачу из публичного JSONPlaceholder REST API и возвращает `id`, `title`, `completed`. Сервер работает отдельным процессом на `http://127.0.0.1:8000/mcp` через Streamable HTTP. C++-клиент выполняет `initialize`, отправляет `notifications/initialized`, вызывает `tools/list` и сохраняет `name`, `description`, `inputSchema`.
+Локальный сервер `mcp_server/server.py` использует официальный Python MCP SDK и публикует только `create_reminder(text, run_at)`. Внешние mock REST API не используются. Сервер работает отдельным процессом на `http://127.0.0.1:8000/mcp` через Streamable HTTP. C++-клиент выполняет `initialize`, отправляет `notifications/initialized`, вызывает `tools/list` и сохраняет `name`, `description`, `inputSchema`.
 
 Web UI обращается только к C++ backend:
 
@@ -448,7 +448,7 @@ py -3.11 -m venv .venv-mcp
 .\.venv-mcp\Scripts\python.exe mcp_server\server.py
 ```
 
-Во втором терминале соберите и запустите C++ backend приведёнными выше командами, затем откройте `http://127.0.0.1:8080` и нажмите `Connect` в блоке MCP. Раскройте `Available tools`, выберите `get_todo`, укажите `id` и явно нажмите `Run tool`. Ответ и статус вызова появятся в `Recent calls`. `add` и `echo` также доступны. По умолчанию C++ подключается к `http://127.0.0.1:8000/mcp`; другой адрес можно задать переменной среды `MCP_SERVER_URL` до запуска backend.
+Во втором терминале соберите и запустите C++ backend приведёнными выше командами, затем откройте `http://127.0.0.1:8080` и нажмите `Connect` в блоке MCP. Раскройте `Available tools`, выберите `create_reminder`, укажите `text` и будущий `run_at` и явно нажмите `Run tool`. Ответ и статус вызова появятся в `Recent calls`. По умолчанию C++ подключается к `http://127.0.0.1:8000/mcp`; другой адрес можно задать переменной среды `MCP_SERVER_URL` до запуска backend.
 
 ### Через CMake
 
@@ -488,7 +488,7 @@ g++ -std=c++17 -Wall -Wextra -pedantic -I. tests\mcp_client_tests.cpp -o build\m
 | `POST /api/mcp/connect` | — | MCP handshake и первоначальный `tools/list` |
 | `POST /api/mcp/disconnect` | — | Закрыть MCP-сессию и очистить cached tools |
 | `GET /api/mcp/tools` | — | Обновить или вернуть текущее состояние MCP tools |
-| `POST /api/mcp/call` | `{"name":"get_todo","arguments":"{\"id\":5}"}` | Вызвать выбранный tool вручную и вернуть историю результатов |
+| `POST /api/mcp/call` | `{"name":"create_reminder","arguments":"{\"text\":\"Проверка\",\"run_at\":\"2099-01-01T12:00:00+03:00\"}"}` | Вызвать выбранный tool вручную и вернуть историю результатов |
 | `POST /api/reminders` | `{"text":"Тренировка","run_at":"2026-09-26T18:00:00+03:00"}` | Создать reminder через существующий MCP `tools/call` |
 | `GET /api/reminders` | — | Прочитать только pending reminders, без истории notifications |
 | `POST /api/reminders/delete` | `{"id":"1"}` | Отменить и удалить запланированный reminder |

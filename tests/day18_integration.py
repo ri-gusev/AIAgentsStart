@@ -149,7 +149,7 @@ def main():
                 raise RuntimeError("MCP exited: " + mcp_process.stderr.read().decode(errors="replace"))
             time.sleep(0.2)
         assert connected, state
-        assert {tool["name"] for tool in state["tools"]} >= {"add", "echo", "get_todo", "create_reminder"}
+        assert {tool["name"] for tool in state["tools"]} == {"create_reminder"}
         tool = next(tool for tool in state["tools"] if tool["name"] == "create_reminder")
         assert set(tool["inputSchema"]["required"]) == {"text", "run_at"}
         assert all(tool["inputSchema"]["properties"][name]["type"] == "string" for name in ("text", "run_at"))
