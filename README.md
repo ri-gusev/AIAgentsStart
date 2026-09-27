@@ -1,5 +1,45 @@
 # C++ Agent Chat
 
+## Day 20 — Stage 4: multi-server MCP panel
+
+The existing MCP panel now displays **Reminder MCP** and **Codeforces MCP**, each
+with connection status, URL and discovered tool count (normally 4 and 2).
+Reminder's original Connect/Disconnect/Refresh tools controls, Create Reminder,
+Reminder Overview and full reminder/delete list are retained. Codeforces has its
+own Connect/Disconnect control. Disconnect closes the current MCP session; the
+hourly watcher or an Agent request may reconnect later when it needs tools.
+
+The compact Codeforces monitor shows the last successful sync in Moscow time and
+the latest successful delta count. **Обновить статус** and the 15-second visible-tab
+refresh read cached backend state via `GET /api/mcp/servers` only; they do not call
+the public Codeforces API or execute `sync_contests`. After backend startup the
+watcher populates this state; connecting Codeforces also reads its saved delta via
+`get_new_contests`, without external REST requests.
+
+Collapsed **Recent calls** shows the manager's bounded call history in actual
+execution order, e.g. `codeforces → get_new_contests · success`, then
+`reminder → create_reminder · success`. No arguments, results, raw JSON or hidden
+model reasoning are rendered. Legacy manual reminder actions and deterministic
+Day 19 pipeline remain separate from this Agent/router history.
+
+`POST /api/mcp/server/connection` uses the existing manager with `server_id` and
+`action` (`connect`/`disconnect`); no second transport or frontend-to-MCP connection
+has been introduced. Existing Reminder API routes remain backward compatible.
+
+Manual check: start both MCP servers and the rebuilt backend; open the UI and
+hard-refresh (Ctrl+F5). Connect Reminder if needed. Confirm 4/2 tools, test the
+independent Codeforces connection button, expand Recent calls, and run an ordinary
+chat request using Codeforces and Reminder (requires a usable saved new-contest
+delta and OpenAI key). Verify routing order and preserve reminder creation,
+Overview and deletion. A zero new-contest delta is a valid state, not an error.
+
+`python tests/day20_stage4_integration.py` checks the UI backend contract on real
+isolated SDK servers with an offline API fixture, cached read-only state, tool
+counts, routing log, independent disconnect/reconnect and the existing Overview.
+Use the MCP Python environment, free ports 8080/18024/18025 and the Stage 3 test
+executable paths. `--serve` keeps these isolated fixtures running for browser QA;
+creating a `stop` file in the printed temporary fixture directory ends that mode.
+
 ## Day 20 — Stage 3: hourly Codeforces watcher
 
 The existing web backend owns one `CodeforcesContestWatcher`, separate from the

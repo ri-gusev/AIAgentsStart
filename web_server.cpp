@@ -615,6 +615,16 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
             state.pop_back();
             sendHttpResponse(client, success ? 200 : 400, "application/json",
                 state + ",\"mcp\":" + buildMcpStateJson(mcpClient) + "}");
+        } else if (request.method == "GET" && request.path == "/api/mcp/servers") {
+            sendHttpResponse(client, manager ? 200 : 503, "application/json",
+                manager ? manager->uiStateJson() : "{\"error\":\"MCP Manager unavailable\"}");
+        } else if (request.method == "POST" && request.path == "/api/mcp/server/connection") {
+            std::string serverId, action, error;
+            const bool valid = extractJsonStringField(request.body, "server_id", serverId) &&
+                extractJsonStringField(request.body, "action", action) && (action == "connect" || action == "disconnect");
+            const bool success = valid && manager && manager->setServerConnection(serverId, action == "connect", error);
+            sendHttpResponse(client, success ? 200 : 400, "application/json",
+                manager ? manager->uiStateJson() : "{\"error\":\"MCP Manager unavailable\"}");
         } else if (request.method == "POST" && request.path == "/api/mcp/connect") {
             std::string error;
             const bool success = mcpClient.connect(error);

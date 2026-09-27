@@ -5,6 +5,8 @@
 
 #include <cctype>
 #include <limits>
+#include <algorithm>
+#include <regex>
 
 namespace {
 constexpr long kRequestTimeoutSeconds = 90L;
@@ -250,7 +252,8 @@ std::string explainMissingContent(const std::string& json) {
 }
 
 std::string buildChatCompletionBody(const std::string& model, const std::string& messagesJson,
-                                    bool jsonResponse, const std::string& toolsJson) {
+                                    bool jsonResponse, const std::string& toolsJson,
+                                    bool includeParallelOption = true) {
     std::string requestMessages = messagesJson;
     if (jsonResponse && !requestMessages.empty() && requestMessages.front() == '[') {
         const std::string instruction = "{\"role\":\"system\",\"content\":\"Return one valid JSON object only.\"}";
@@ -260,9 +263,139 @@ std::string buildChatCompletionBody(const std::string& model, const std::string&
                        ",\"max_completion_tokens\":" + std::to_string(kMaxCompletionTokens);
     if (jsonResponse) body += ",\"response_format\":{\"type\":\"json_object\"}";
     if (!toolsJson.empty() && toolsJson != "[]") {
-        body += ",\"tools\":" + toolsJson + ",\"tool_choice\":\"auto\",\"parallel_tool_calls\":false";
+        body += ",\"tools\":" + toolsJson + ",\"tool_choice\":\"auto\"";
+        // Luna's default reasoning is incompatible with function tools on
+        // Chat Completions. Keep the existing endpoint/model; apply to every
+        // tool-loop request, including the request following a tool result.
+        if (model == "gpt-5.6-luna" || model.rfind("gpt-5.6-luna-", 0) == 0)
+            body += ",\"reasoning_effort\":\"none\"";
+        if (includeParallelOption) body += ",\"parallel_tool_calls\":false";
     }
     return body + '}';
+}
+
+struct ProviderError {
+    std::string type, code, param, message;
+};
+ProviderError parseProviderError(const std::string& response) {
+    ProviderError fields;
+    app_json::JsonValue root; std::string ignored;
+    if (!app_json::JsonParser(response).parse(root, ignored)) return fields;
+    const auto* error = root.member("error");
+    if (!error || error->type != app_json::JsonValue::Type::Object) return fields;
+    auto read = [&](const char* key) {
+        const auto* field = error->member(key);
+        return field && field->type == app_json::JsonValue::Type::String ? field->text : std::string{};
+    };
+    fields.type = read("type"); fields.code = read("code");
+    fields.param = read("param"); fields.message = read("message");
+    return fields;
+}
+bool rejectsParallelOption(long status, const std::string& response) {
+    const auto error = parseProviderError(response);
+    return status == 400 && error.param == "parallel_tool_calls" &&
+        (error.code == "unsupported_parameter" || error.message.rfind("Unsupported parameter", 0) == 0);
+}
+void replaceSensitiveValue(std::string& text, const std::string& value) {
+    if (value.empty()) return;
+    std::size_t at = 0;
+    while ((at = text.find(value, at)) != std::string::npos) {
+        text.replace(at, value.size(), "[redacted]"); at += 10;
+    }
+}
+
+std::string sanitizeProviderMessage(std::string message, const std::string& apiKey,
+                                    const std::string& messagesJson) {
+    replaceSensitiveValue(message, apiKey);
+    // Remove exact conversation content if an error echoes it without quotes.
+    app_json::JsonValue messages; std::string ignored;
+    if (app_json::JsonParser(messagesJson).parse(messages, ignored) &&
+        messages.type == app_json::JsonValue::Type::Array) {
+        for (const auto& item : messages.array) {
+            const auto* content = item.member("content");
+            if (content && content->type == app_json::JsonValue::Type::String)
+                replaceSensitiveValue(message, content->text);
+        }
+    }
+    // Bound provider-controlled input and diagnostic output. Redaction precedes
+    // output truncation so a truncated credential is not accidentally revealed.
+    if (message.size() > 16384) message.resize(16384);
+    message = std::regex_replace(message, std::regex(
+        R"((authorization\s*[:=]\s*(bearer\s+)?|bearer\s+|(?:api[_ -]?key|password|secret|access[_ -]?token)\s*[:=]\s*)[^\s,;]+)",
+        std::regex::icase), "[redacted]");
+    message = std::regex_replace(message, std::regex(
+        R"((sk-|sess-)[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)"), "[redacted]");
+    message = std::regex_replace(message, std::regex(
+        R"(https?://[^\s]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", std::regex::icase), "[redacted]");
+    message = std::regex_replace(message, std::regex(
+        R"((?:prompt|submitted text|request body|input|content|arguments)\s*[:=].*)", std::regex::icase), "[redacted]");
+    const std::vector<std::string> safeNames = {
+        "tools", "messages", "model", "tool_choice", "parallel_tool_calls", "response_format",
+        "max_completion_tokens", "max_tokens", "reasoning_effort", "temperature", "top_p",
+        "required", "additionalProperties", "properties", "items", "type", "object", "array",
+        "string", "integer", "boolean", "number", "null", "function", "parameters", "strict",
+        "$ref", "$defs", "system", "developer", "user", "assistant", "tool", "role", "content",
+        "json", "json_object", "json_schema", "auto", "none", "true", "false"
+    };
+    std::string cleaned;
+    for (std::size_t index = 0; index < message.size();) {
+        const char quote = message[index];
+        // An apostrophe in an English word is not a quoted request value.
+        const bool apostrophe = quote == '\'' && index > 0 && index + 1 < message.size() &&
+            std::isalpha(static_cast<unsigned char>(message[index-1])) &&
+            std::isalpha(static_cast<unsigned char>(message[index+1]));
+        if ((quote == '\'' || quote == '"' || quote == '`') && !apostrophe) {
+            std::size_t end = index + 1;
+            while (end < message.size() && message[end] != quote) {
+                if (message[end] == '\\' && end + 1 < message.size()) ++end;
+                ++end;
+            }
+            const std::string value = message.substr(index + 1, end - index - 1);
+            if (end < message.size() && std::find(safeNames.begin(), safeNames.end(), value) != safeNames.end())
+                cleaned += quote + value + quote;
+            else cleaned += "[redacted]";
+            index = end < message.size() ? end + 1 : end;
+        } else {
+            const auto byte = static_cast<unsigned char>(message[index++]);
+            cleaned += byte < 32 || byte == 127 ? ' ' : static_cast<char>(byte);
+        }
+    }
+    if (cleaned.size() > 512) {
+        std::size_t end = 512;
+        while (end > 0 && (static_cast<unsigned char>(cleaned[end]) & 0xC0) == 0x80) --end;
+        cleaned.resize(end); cleaned += "...";
+    }
+    return cleaned;
+}
+
+std::string safeProviderError(long status, const std::string& response,
+                              const std::string& apiKey = {}, const std::string& messagesJson = {}) {
+    // Metadata uses a whitelist; the message is redacted separately because it
+    // can echo prompts, arguments, tool names or credentials.
+    const auto fields = parseProviderError(response);
+    std::string result = "OpenAI API returned HTTP " + std::to_string(status);
+    for (const char* type : {"invalid_request_error", "authentication_error", "permission_error", "rate_limit_error", "server_error"})
+        if (fields.type == type) result += "; type=" + fields.type;
+    for (const char* code : {"unsupported_parameter", "unsupported_value", "invalid_function_parameters", "invalid_json_schema",
+                             "model_not_found", "context_length_exceeded", "invalid_api_key", "insufficient_quota"})
+        if (fields.code == code) result += "; code=" + fields.code;
+    for (const char* param : {"tools", "messages", "model", "tool_choice", "parallel_tool_calls",
+                              "response_format", "max_completion_tokens", "max_tokens"}) {
+        const std::string name = param;
+        if (fields.param == name || fields.param.rfind(name + "[", 0) == 0 || fields.param.rfind(name + ".", 0) == 0)
+            result += "; param=" + name;
+    }
+    if (fields.message.rfind("Invalid schema for function", 0) == 0)
+        result += "; detail=Invalid function tool schema";
+    else if (fields.message.rfind("Unsupported parameter", 0) == 0)
+        result += "; detail=Unsupported request parameter";
+    else if (fields.message.rfind("Unsupported value", 0) == 0)
+        result += "; detail=Unsupported request value";
+    else if (fields.message.rfind("Invalid JSON", 0) == 0)
+        result += "; detail=Invalid request JSON";
+    const std::string message = sanitizeProviderMessage(fields.message, apiKey, messagesJson);
+    if (!message.empty()) result += "; message=" + message;
+    return result;
 }
 }
 
@@ -339,7 +472,7 @@ bool ApiClient::sendChatCompletion(const std::string& apiKey, const std::string&
     if (finishReason) finishReason->clear();
     if (completion) *completion = {};
     if (!initialized_) { error = "Could not initialize libcurl"; return false; }
-    const std::string body = buildChatCompletionBody(model, messagesJson, jsonResponse, toolsJson);
+    std::string body = buildChatCompletionBody(model, messagesJson, jsonResponse, toolsJson);
     CURL* curl = curl_easy_init();
     if (!curl) { error = "Could not initialize libcurl"; return false; }
     std::string response;
@@ -363,13 +496,23 @@ bool ApiClient::sendChatCompletion(const std::string& apiKey, const std::string&
     }
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    // Some models reject this optional switch. Retry only that explicit 400,
+    // once, with the same model/tools/messages; never fall back to text-only.
+    if (result == CURLE_OK && rejectsParallelOption(status, response)) {
+        body = buildChatCompletionBody(model, messagesJson, jsonResponse, toolsJson, false);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+        response.clear();
+        result = curl_easy_perform(curl);
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    }
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
     if (result != CURLE_OK) { error = curl_easy_strerror(result); return false; }
     if (status < 200 || status >= 300) {
         // Provider error bodies may echo submitted text or credentials. Never
-        // forward their contents to the browser or diagnostic logs.
-        error = "OpenAI API returned HTTP " + std::to_string(status);
+        // forward an unredacted body to the browser or diagnostic logs.
+        error = safeProviderError(status, response, apiKey, messagesJson);
         return false;
     }
     if (usage) extractTokenUsage(response, *usage);

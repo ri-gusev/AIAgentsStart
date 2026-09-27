@@ -27,9 +27,12 @@ public:
     std::vector<RoutedMcpCall> calls() const;
     void setSuccessfulCallHandler(std::function<void(const RegisteredMcpTool&)> handler);
     bool syncCodeforces(std::string& resultJson, std::string& error);
+    std::string uiStateJson() const;
+    bool setServerConnection(const std::string& serverId, bool connect, std::string& error);
 
 private:
     mutable std::recursive_mutex mutex_;
+    std::string codeforcesStateJson_;
     McpClient& reminder_;
     std::unique_ptr<McpClient> codeforces_;
     std::vector<RoutedMcpCall> calls_;

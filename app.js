@@ -139,6 +139,7 @@ function makeToolArgumentField(name, definition, required) {
 }
 
 function renderMcpState(data = {}) {
+  refreshMcpServers();
   const expandedTools = new Set(Array.from(mcpTools.querySelectorAll('.mcp-tool'))
     .filter((item) => item.open).map((item) => item.dataset.toolName));
   // Move the existing UI, rather than clone/recreate it: form values, event
@@ -710,9 +711,13 @@ async function askAgent(question) {
     if (!response.ok) {
       pendingMessage.remove();
       const serverError = typeof data.error === 'string' ? data.error : '';
+      const openaiStatus = /OpenAI API returned HTTP (\d{3})/.exec(serverError);
+      const openaiParam = /; param=(tools|messages|model|tool_choice|parallel_tool_calls|response_format|max_completion_tokens|max_tokens)(?:;|$)/.exec(serverError);
       const lifecycleError = data.input_rejected && /^(Переход между этапами|Task stages can change|Task changes are not allowed|Task is paused|Task is complete|Create a plan|Complete execution|Only an executing task)/.test(serverError);
       const error = lifecycleError ? serverError : data.input_rejected
         ? 'Сообщение отклонено input policy. Уберите секреты или запросы на выполнение опасных команд.'
+        : openaiStatus ? 'Ошибка OpenAI: HTTP ' + openaiStatus[1] +
+          (openaiParam ? ' · параметр ' + openaiParam[1] : '') + '. Подробности — в ответе /api/chat.'
         : 'Не удалось завершить запрос. Попробуйте ещё раз.';
       // Provider error bodies and rejected user text are never shown.
       // Rebuild the transcript as well: another tab may have changed the
@@ -729,6 +734,7 @@ async function askAgent(question) {
   } finally {
     requestPending = false;
     updateControlState();
+    refreshMcpServers();
     input.focus();
   }
 }
@@ -830,6 +836,102 @@ mcpRefreshButton.addEventListener('click', () => requestMcp('/api/mcp/tools'));
 
 loadAgentState();
 requestMcp('/api/mcp/tools');
+
+let mcpServersLoading = false;
+let mcpServerActionPending = false;
+let mcpServersSignature = '';
+
+function renderMcpServers(data) {
+  const container = document.querySelector('#mcpServers');
+  const signature = JSON.stringify(data.servers) + String(mcpServerActionPending);
+  if (signature !== mcpServersSignature) {
+    mcpServersSignature = signature;
+    const reminderActions = mcpConnectButton.parentElement;
+    // Keep the original controls and listeners when rebuilding server cards.
+    container.parentElement.append(reminderActions);
+    container.replaceChildren();
+    (Array.isArray(data.servers) ? data.servers : []).forEach((server) => {
+    const card = document.createElement('div');
+    card.className = 'mcp-server-card';
+    const heading = document.createElement('div');
+    heading.className = 'mcp-heading';
+    const name = document.createElement('strong');
+    name.textContent = String(server.name);
+    const status = document.createElement('span');
+    status.className = 'mcp-status';
+    status.textContent = String(server.status);
+    status.dataset.status = String(server.status).toLowerCase();
+    heading.append(name, status);
+    const detail = document.createElement('small');
+    detail.textContent = String(server.tool_count) + ' tools · ' + String(server.url);
+    card.append(heading, detail);
+    if (server.id === 'reminder') card.append(reminderActions);
+    if (server.id === 'codeforces') {
+      const button = document.createElement('button');
+      button.className = 'secondary-button';
+      button.type = 'button';
+      button.textContent = server.status === 'Connected' ? 'Disconnect' : 'Connect';
+      button.disabled = mcpServerActionPending;
+      button.addEventListener('click', async () => {
+        if (mcpServerActionPending) return;
+        mcpServerActionPending = true;
+        button.disabled = true;
+        try {
+          const response = await fetch('/api/mcp/server/connection', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ server_id: server.id, action: server.status === 'Connected' ? 'disconnect' : 'connect' })
+          });
+          if (!response.ok) throw new Error('Не удалось изменить подключение Codeforces MCP.');
+          renderMcpServers(await response.json());
+        } catch {
+          const error = document.querySelector('#mcpServersError');
+          error.textContent = 'Не удалось изменить подключение Codeforces MCP.';
+          error.hidden = false;
+        } finally {
+          mcpServerActionPending = false;
+          refreshMcpServers();
+        }
+      });
+      card.append(button);
+    }
+    container.append(card);
+    });
+  }
+  const timestamp = data.codeforces?.last_sync_at;
+  document.querySelector('#codeforcesLastSync').textContent = timestamp == null ? 'Ещё не было' :
+    new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long',
+      hour: '2-digit', minute: '2-digit' }).format(new Date(Number(timestamp) * 1000)) + ' МСК';
+  document.querySelector('#codeforcesNewCount').textContent = String(data.codeforces?.new_count ?? 0);
+  const log = document.querySelector('#mcpRoutingCalls');
+  log.replaceChildren();
+  const calls = Array.isArray(data.calls) ? data.calls : [];
+  if (!calls.length) log.textContent = 'Вызовов пока нет.';
+  calls.forEach((call) => {
+    const row = document.createElement('p');
+    row.textContent = String(call.server_id || 'unknown') + ' → ' + String(call.tool) +
+      ' · ' + (call.success ? 'success' : 'error');
+    log.append(row);
+  });
+}
+
+async function refreshMcpServers() {
+  if (mcpServersLoading) return;
+  mcpServersLoading = true;
+  try {
+    const response = await fetch('/api/mcp/servers');
+    if (!response.ok) throw new Error();
+    renderMcpServers(await response.json());
+    document.querySelector('#mcpServersError').hidden = true;
+  } catch {
+    const error = document.querySelector('#mcpServersError');
+    error.textContent = 'Статусы MCP недоступны. Проверьте backend.';
+    error.hidden = false;
+  } finally { mcpServersLoading = false; }
+}
+document.querySelector('#mcpServersRefresh').addEventListener('click', refreshMcpServers);
+refreshMcpServers();
+// Read-only cached backend state; never polls the public Codeforces REST API.
+setInterval(() => { if (!document.hidden) refreshMcpServers(); }, 15000);
 // Do not refresh on window focus: the refresh marks the UI busy and can swallow
 // the first click on actions such as project deletion. Every mutation already
 // returns the complete current Agent state.

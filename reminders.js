@@ -261,6 +261,7 @@ function showCodeforcesContests(payload) {
 function applyReminderEvent(data) {
   if (data.type === 'codeforces_contests') {
     showCodeforcesContests(data.payload);
+    refreshMcpServers();
     return;
   }
   const error = typeof data.error === 'string' ? data.error : '';

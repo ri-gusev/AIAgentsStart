@@ -118,10 +118,12 @@
 
         <section class="side-card mcp-panel" aria-labelledby="mcpTitle">
           <div class="mcp-heading">
-            <h3 id="mcpTitle">MCP</h3>
-            <span id="mcpStatus" class="mcp-status" data-status="disconnected" aria-live="polite">Disconnected</span>
+            <h3 id="mcpTitle">MCP Servers</h3>
+            <span id="mcpStatus" class="mcp-status" data-status="disconnected" hidden>Disconnected</span>
           </div>
-          <dl class="mcp-server-details">
+          <div id="mcpServers" class="mcp-servers" aria-live="polite">Загрузка серверов…</div>
+          <p id="mcpServersError" class="mcp-error" role="status" hidden></p>
+          <dl class="mcp-server-details" hidden>
             <div><dt>Server</dt><dd id="mcpServerName">Local Tools Server</dd></div>
             <div><dt>Address</dt><dd><code id="mcpServerUrl">http://127.0.0.1:8000/mcp</code></dd></div>
           </dl>
@@ -131,6 +133,12 @@
             <button id="mcpRefreshButton" class="secondary-button" type="button" disabled>Refresh tools</button>
           </div>
           <p id="mcpError" class="mcp-error" role="status" hidden></p>
+          <div class="codeforces-monitor">
+            <div class="mcp-heading"><strong>Codeforces monitor</strong><button id="mcpServersRefresh" class="secondary-button" type="button">Обновить статус</button></div>
+            <p>Last sync: <span id="codeforcesLastSync">Ещё не было</span></p>
+            <p>New contests: <span id="codeforcesNewCount">0</span></p>
+          </div>
+          <details class="mcp-routing-log"><summary>Recent calls</summary><div id="mcpRoutingCalls">Вызовов пока нет.</div></details>
           <button id="mcpToolsToggle" class="mcp-tools-toggle" type="button" aria-expanded="false">Available tools</button>
           <div id="mcpTools" class="mcp-tools" aria-live="polite" hidden>Connect to discover tools.</div>
           <div id="reminderOverviewPanel" class="reminder-overview" aria-label="Сводка напоминаний" hidden>

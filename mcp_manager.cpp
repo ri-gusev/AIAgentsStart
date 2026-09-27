@@ -37,6 +37,10 @@ bool McpManager::connectAll(std::string& error) {
         std::string detail;
         const bool ready = server.second->status() == "Connected" ?
             server.second->refreshTools(detail) : server.second->connect(detail);
+        if (ready && server.first == "codeforces" && codeforcesStateJson_.empty()) {
+            std::string cached, ignored;
+            if (codeforces_->callTool("get_new_contests", "{}", cached, ignored)) codeforcesStateJson_ = cached;
+        }
         if (!ready) {
             if (!error.empty()) error += "; ";
             error += server.first + ": " + detail;
@@ -68,7 +72,7 @@ std::string McpManager::modelToolsJson() const {
         first = false;
         json += "{\"type\":\"function\",\"function\":{\"name\":\"" + app_json::jsonEscape(tool.alias) +
                 "\",\"description\":\"" + app_json::jsonEscape(tool.description) +
-                "\",\"parameters\":" + (tool.schemaJson.empty() ? "{}" : tool.schemaJson) + "}}";
+                "\",\"strict\":false,\"parameters\":" + (tool.schemaJson.empty() ? "{}" : tool.schemaJson) + "}}";
     }
     return json + ']';
 }
@@ -88,6 +92,9 @@ bool McpManager::callTool(const std::string& alias, const std::string& arguments
         record.success = client.callTool(found->actualToolName, argumentsJson, resultJson, error);
     }
     record.resultJson = resultJson; record.error = error;
+    if (record.success && record.serverId == "codeforces" &&
+        (record.actualToolName == "get_new_contests" || record.actualToolName == "sync_contests"))
+        codeforcesStateJson_ = resultJson;
     calls_.push_back(record);
     if (calls_.size() > 20) calls_.erase(calls_.begin());
     if (record.success && onSuccess_) onSuccess_(*found);
@@ -115,7 +122,57 @@ bool McpManager::syncCodeforces(std::string& resultJson, std::string& error) {
     record.argumentsJson = "{}";
     record.success = codeforces_->callTool(record.actualToolName, record.argumentsJson, resultJson, error);
     record.resultJson = resultJson; record.error = error;
+    if (record.success) codeforcesStateJson_ = resultJson;
     calls_.push_back(record);
     if (calls_.size() > 20) calls_.erase(calls_.begin());
     return record.success;
+}
+
+bool McpManager::setServerConnection(const std::string& serverId, bool connect, std::string& error) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    McpClient* client = serverId == "reminder" ? &reminder_ : serverId == "codeforces" ? codeforces_.get() : nullptr;
+    if (!client) { error = "Unknown MCP server"; return false; }
+    const bool success = connect ? client->connect(error) : client->disconnect(error);
+    if (success && connect && serverId == "codeforces") {
+        std::string cached, ignored;
+        if (client->callTool("get_new_contests", "{}", cached, ignored)) codeforcesStateJson_ = cached;
+    }
+    return success;
+}
+
+std::string McpManager::uiStateJson() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::string json = "{\"servers\":[";
+    bool first = true;
+    for (const auto& server : std::vector<std::pair<std::string, const McpClient*>>{
+            {"reminder", &reminder_}, {"codeforces", codeforces_.get()}}) {
+        if (!first) json += ',';
+        first = false;
+        json += "{\"id\":\"" + server.first + "\",\"name\":\"" +
+            std::string(server.first == "reminder" ? "Reminder MCP" : "Codeforces MCP") +
+            "\",\"status\":\"" + app_json::jsonEscape(server.second->status()) +
+            "\",\"url\":\"" + app_json::jsonEscape(server.second->serverUrl()) +
+            "\",\"tool_count\":" + std::to_string(server.second->tools().size()) + "}";
+    }
+    json += "],\"codeforces\":";
+    std::string syncAt = "null", newCount = "0";
+    app_json::JsonValue state; std::string ignored;
+    if (!codeforcesStateJson_.empty() && app_json::JsonParser(codeforcesStateJson_).parse(state, ignored)) {
+        const auto* at = state.member("checked_at");
+        if (!at) at = state.member("last_sync_at");
+        const auto* count = state.member("new_count");
+        // Build only presentation metadata, never expose raw tool results.
+        if (at) syncAt = app_json::serializeJson(*at);
+        if (count) newCount = app_json::serializeJson(*count);
+    }
+    json += "{\"last_sync_at\":" + syncAt + ",\"new_count\":" + newCount + "},\"calls\":[";
+    first = true;
+    for (const auto& call : calls_) {
+        if (!first) json += ',';
+        first = false;
+        json += "{\"server_id\":\"" + app_json::jsonEscape(call.serverId) +
+            "\",\"tool\":\"" + app_json::jsonEscape(call.actualToolName.empty() ? call.alias : call.actualToolName) +
+            "\",\"success\":" + (call.success ? "true" : "false") + "}";
+    }
+    return json + "]}";
 }

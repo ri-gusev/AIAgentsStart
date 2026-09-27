@@ -703,7 +703,8 @@ bool Agent::processUserMessage(const std::string& userMessage, std::string& answ
             bool useTools = false;
             if (!sendTrackedChatCompletion(messages + ']', decision, error, true) ||
                 !boolField(decision, "use_tools", useTools)) {
-                error = "Could not classify tool operation versus project task"; return false;
+                error = "Could not classify tool operation versus project task" +
+                    (error.empty() ? std::string{} : ": " + error); return false;
             }
             if (useTools) taskRequest = false;
         }
@@ -1709,8 +1710,10 @@ bool Agent::reviewAnswer(const std::string& userMessage, const std::string& draf
                     "Check the draft against these actual results; never invent success:\\n" +
                     app_json::jsonEscape(toolEvidence) + "\"}]";
     }
-    if (!sendTrackedChatCompletion(messages, review, error, true, false, &finishReason) ||
-        finishReason != "stop") { error = "Output-policy check failed"; return false; }
+    if (!sendTrackedChatCompletion(messages, review, error, true, false, &finishReason)) {
+        error = "Output-policy check failed: " + error; return false;
+    }
+    if (finishReason != "stop") { error = "Output-policy check failed: incomplete response"; return false; }
     bool accepted = false;
     if (!boolField(review, "accepted", accepted)) { error = "Invalid output-policy review"; return false; }
     if (accepted) finalAnswer = draft;
