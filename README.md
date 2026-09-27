@@ -1,5 +1,67 @@
 # C++ Agent Chat
 
+## Day 20 — Stage 3: hourly Codeforces watcher
+
+The existing web backend owns one `CodeforcesContestWatcher`, separate from the
+Reminder Scheduler. It starts after the HTTP socket is bound, performs one sync
+immediately, then waits one hour **after completion** before the next attempt.
+Failures wait the same hour (no rapid retries). Restart starts a fresh immediate
+check; this is a single-process watcher, not a distributed polling lock.
+
+Each check uses `McpManager::syncCodeforces()` and the existing MCP transport to
+call `sync_contests` on `CODEFORCES_MCP_SERVER_URL` (default localhost:8001/mcp).
+Manager access to that client and call history is serialized against Agent tool
+calls. The watcher does not access the Reminder client or scheduler. Idempotent
+start prevents duplicate threads; stop wakes the hourly wait and joins the worker
+before the event broadcaster is destroyed. An in-flight MCP request can take up
+to the existing transport timeout to finish.
+
+The Codeforces server still owns baseline/delta/database semantics: clean first
+sync yields zero new contests, identical sync yields zero, and API failures preserve
+the last successful snapshot and delta. Only a successful nonempty sync emits:
+
+```json
+{"type":"codeforces_contests","payload":{"new_count":1,"contests":[...]}}
+```
+
+This uses the existing `/api/reminders/events` WebSocket; reminder event types are
+unchanged. The UI shows the latest compact contest notice inside MCP, with Moscow
+times. Browser notifications are sent only when permission is already granted;
+events never trigger a permission prompt. No replay or offline notification queue
+is added: open the UI to receive events. Stage 4 server status/monitor UI is not
+implemented yet. Manual `sync_contests` Agent calls remain possible separately
+from the automatic hourly cadence.
+
+Build/start (both Python MCP servers should already be running):
+
+```powershell
+cmake --preset mingw-debug
+cmake --build --preset mingw-debug
+$env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
+.\build\mingw-debug\openai_cli.exe
+```
+
+Ubuntu:
+
+```bash
+cmake -S . -B build
+cmake --build build
+./build/openai_cli
+```
+
+Open http://127.0.0.1:8080, optionally grant notifications through the existing
+button, and leave the UI open. A clean Codeforces database initializes silently;
+a later hourly sync emits a notice only if an upcoming contest ID has appeared
+since the previous snapshot. Do not delete production state just to force alerts.
+
+Offline checks: CTest includes `codeforces_hourly_watcher` (injected short interval
+only in tests). Run `python tests/day20_stage3_integration.py` with the MCP Python
+environment and free ports 8080/18023; Windows expects the verified
+`build/day20-tests/openai_cli.exe`, Linux `build/openai_cli`. It launches isolated
+real SDK/backend processes and a test-only API fixture, checks WebSocket delivery,
+SQLite delta and graceful shutdown, without OpenAI/public API calls or production
+database changes.
+
 ## Day 20 — Stage 2: multi-MCP routing and Agent tool loop
 
 `McpManager` wraps the existing `McpClient` transport. It borrows the same Reminder client used by the UI and Day 19 pipeline and owns a separate Codeforces client. Registrations:

@@ -7,6 +7,7 @@
 #include "reminder_store.h"
 #include "reminder_scheduler.h"
 #include "reminder_events.h"
+#include "codeforces_watcher.h"
 #include "socket_platform.h"
 
 #include <cctype>
@@ -519,6 +520,12 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
         reminderEvents.broadcast("{\"type\":\"triggered\"," + buildReminderStateJson(reminderStore, {}, triggered).substr(1));
     });
     reminderScheduler.start();
+    std::unique_ptr<CodeforcesContestWatcher> codeforcesWatcher;
+    if (manager) {
+        codeforcesWatcher = std::make_unique<CodeforcesContestWatcher>(*manager,
+            [&](const std::string& event) { reminderEvents.broadcast(event); });
+        codeforcesWatcher->start();
+    }
     std::cout << "Listening on http://" << bindAddress << ":8080\n"
               << "Open http://127.0.0.1:8080 locally, or http://<server-ip>:8080 on Linux\n"
               << "Press Ctrl+C to stop the server\n";
@@ -785,6 +792,7 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
         }
         net::closeSocket(client);
     }
+    if (codeforcesWatcher) codeforcesWatcher->stop();
     reminderScheduler.stop();
     if (manager) manager->setSuccessfulCallHandler({});
     reminderEvents.stop();

@@ -215,7 +215,54 @@ async function deleteReminder(id, button) {
   }
 }
 
+function showCodeforcesContests(payload) {
+  if (!payload || !Array.isArray(payload.contests) || !payload.contests.length) return;
+  let card = document.querySelector('#codeforcesContestNotice');
+  if (!card) {
+    card = document.createElement('section');
+    card.id = 'codeforcesContestNotice';
+    card.className = 'reminder-overview-result';
+    card.setAttribute('role', 'status');
+    reminderForm.closest('.mcp-panel').append(card);
+  }
+  card.replaceChildren();
+  const title = document.createElement('h5');
+  title.textContent = '🏆 Новые соревнования Codeforces';
+  const summary = document.createElement('p');
+  summary.textContent = 'За последнюю проверку обнаружено: ' + payload.contests.length;
+  card.append(title, summary);
+  const lines = [];
+  payload.contests.forEach((contest) => {
+    const name = String(contest.name || 'Соревнование Codeforces');
+    const timestamp = Number(contest.start_time_seconds);
+    const time = contest.start_time_seconds != null && Number.isFinite(timestamp)
+      ? new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric',
+          month: 'long', hour: '2-digit', minute: '2-digit' }).format(new Date(timestamp * 1000)) + ' МСК'
+      : 'Время начала пока не указано';
+    const row = document.createElement('p');
+    const heading = document.createElement('strong');
+    heading.textContent = name;
+    const date = document.createElement('small');
+    date.textContent = time;
+    row.append(heading, document.createElement('br'), date);
+    card.append(row);
+    lines.push(name + ' — ' + time);
+  });
+  if ('Notification' in window && Notification.permission === 'granted') {
+    try {
+      const notification = new Notification('🏆 Новые соревнования Codeforces', {
+        body: lines.join('\n'), tag: 'codeforces-contests'
+      });
+      notification.onclick = () => window.focus();
+    } catch { /* The in-page summary remains available. */ }
+  }
+}
+
 function applyReminderEvent(data) {
+  if (data.type === 'codeforces_contests') {
+    showCodeforcesContests(data.payload);
+    return;
+  }
   const error = typeof data.error === 'string' ? data.error : '';
   reminderError.textContent = error;
   reminderError.hidden = !error;

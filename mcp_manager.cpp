@@ -29,6 +29,7 @@ McpManager::McpManager(McpClient& reminder, std::string codeforcesUrl) : reminde
 }
 
 bool McpManager::connectAll(std::string& error) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     error.clear();
     bool success = true;
     for (const auto& server : std::vector<std::pair<std::string, McpClient*>>{
@@ -46,6 +47,7 @@ bool McpManager::connectAll(std::string& error) {
 }
 
 std::vector<RegisteredMcpTool> McpManager::registry() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::vector<RegisteredMcpTool> tools;
     for (const auto& server : std::vector<std::pair<std::string, const McpClient*>>{
             {"reminder", &reminder_}, {"codeforces", codeforces_.get()}}) {
@@ -73,6 +75,7 @@ std::string McpManager::modelToolsJson() const {
 
 bool McpManager::callTool(const std::string& alias, const std::string& argumentsJson,
                           std::string& resultJson, std::string& error) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     resultJson.clear(); error.clear();
     const auto tools = registry();
     const auto found = std::find_if(tools.begin(), tools.end(), [&](const auto& tool) { return tool.alias == alias; });
@@ -92,7 +95,27 @@ bool McpManager::callTool(const std::string& alias, const std::string& arguments
 }
 
 McpClient& McpManager::codeforcesClient() { return *codeforces_; }
-const std::vector<RoutedMcpCall>& McpManager::calls() const { return calls_; }
+std::vector<RoutedMcpCall> McpManager::calls() const {
+    std::lock_guard<std::recursive_mutex> lock(mutex_); return calls_;
+}
 void McpManager::setSuccessfulCallHandler(std::function<void(const RegisteredMcpTool&)> handler) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     onSuccess_ = std::move(handler);
+}
+
+bool McpManager::syncCodeforces(std::string& resultJson, std::string& error) {
+    // Background polling touches only this server; serialize with Agent calls.
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    resultJson.clear(); error.clear();
+    if (codeforces_->status() != "Connected" && !codeforces_->connect(error)) return false;
+    RoutedMcpCall record;
+    record.alias = "codeforces__sync_contests";
+    record.serverId = "codeforces";
+    record.actualToolName = "sync_contests";
+    record.argumentsJson = "{}";
+    record.success = codeforces_->callTool(record.actualToolName, record.argumentsJson, resultJson, error);
+    record.resultJson = resultJson; record.error = error;
+    calls_.push_back(record);
+    if (calls_.size() > 20) calls_.erase(calls_.begin());
+    return record.success;
 }

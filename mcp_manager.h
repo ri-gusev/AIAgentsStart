@@ -2,6 +2,7 @@
 #include "mcp_client.h"
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -23,10 +24,12 @@ public:
     bool callTool(const std::string& alias, const std::string& argumentsJson,
                   std::string& resultJson, std::string& error);
     McpClient& codeforcesClient();
-    const std::vector<RoutedMcpCall>& calls() const;
+    std::vector<RoutedMcpCall> calls() const;
     void setSuccessfulCallHandler(std::function<void(const RegisteredMcpTool&)> handler);
+    bool syncCodeforces(std::string& resultJson, std::string& error);
 
 private:
+    mutable std::recursive_mutex mutex_;
     McpClient& reminder_;
     std::unique_ptr<McpClient> codeforces_;
     std::vector<RoutedMcpCall> calls_;
