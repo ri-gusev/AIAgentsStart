@@ -1,8 +1,13 @@
 #include "agent.h"
+#include "mcp_manager.h"
+#include "json_value.h"
 
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -22,10 +27,12 @@ struct Reply {
     bool success = true;
     std::string finish = "stop";
     ApiTokenUsage usage{100, 20, 10, 110};
+    std::vector<ApiToolCall> toolCalls;
 };
 struct Call {
     std::string messages;
     bool json = false;
+    std::string tools;
 };
 std::deque<Reply> replies;
 std::vector<Call> calls;
@@ -1365,6 +1372,99 @@ void testProjectInvariantsAreSeparatePersistentAndOutputOnly() {
     require(agent.selectChat(secondProject, error) && agent.projectInvariants().empty(),
             "Project invariant isolation changed after deletion");
 }
+void enqueueTool(const std::string& id, const std::string& alias, const std::string& arguments) {
+    Reply reply; reply.finish = "tool_calls";
+    reply.toolCalls.push_back({id, alias, arguments}); replies.push_back(std::move(reply));
+}
+
+std::string futureReminderArguments() {
+    const char* start = std::getenv("DAY20_CONTEST_START");
+    require(start != nullptr, "Missing isolated contest timestamp");
+    const std::time_t at = static_cast<std::time_t>(std::stoll(start) - 86400);
+    std::ostringstream date; date << std::put_time(std::gmtime(&at), "%Y-%m-%dT%H:%M:%SZ");
+    return "{\"text\":\"Day20 contest reminder\",\"run_at\":\"" + date.str() + "\"}";
+}
+
+void testMultiMcpIntegration() {
+    for (int scenario = 0; scenario < 10; ++scenario) {
+        resetMock();
+        Fixture fixture; Agent agent(fixture.config.string());
+        std::string answer, error;
+        require(agent.isReady() && agent.setMemoryMode("manual",error),error);
+        McpClient reminder;
+        McpManager manager(reminder, scenario==6 ? "http://127.0.0.1:1/mcp" : "");
+        agent.setMcpManager(&manager);
+        unsigned created = 0;
+        manager.setSuccessfulCallHandler([&](const auto& tool) {
+            if (tool.serverId=="reminder" && tool.actualToolName=="create_reminder") ++created;
+        });
+        std::string prompt = "Покажи данные инструментов";
+        if (scenario==0) {
+            prompt = "Какие новые соревнования Codeforces появились при последней проверке? Для ближайшего из них создай мне напоминание за сутки до начала.";
+            enqueue("{\"use_tools\":true}");
+            enqueueTool("cf_1","codeforces__get_new_contests","{}");
+            enqueueTool("rem_1","reminder__create_reminder",futureReminderArguments());
+        } else if (scenario==1) prompt = "Привет";
+        else if (scenario==2) {
+            enqueueTool("r","reminder__get_upcoming_reminders","{}");
+            enqueueTool("c","codeforces__get_new_contests","{}");
+        } else if (scenario==3) {
+            prompt = "Создай напоминание";
+            enqueue("{\"use_tools\":true}");
+            enqueueTool("create","reminder__create_reminder",futureReminderArguments());
+        } else if (scenario==4) {
+            enqueueTool("invalid","reminder__create_reminder","{\"text\":\"bad\",\"run_at\":\"2000-01-01T00:00:00Z\"}");
+            enqueueTool("unknown","missing__tool","{}");
+        } else if (scenario==5) {
+            for (int i=0;i<9;++i) enqueueTool("loop_"+std::to_string(i),"missing__tool","{}");
+        } else if (scenario==6) enqueueTool("available","reminder__get_upcoming_reminders","{}");
+        else if (scenario==7) {
+            prompt = "Реализуй приложение для сортировки файлов";
+            enqueue("{\"use_tools\":false}"); enqueue(structuredPlan("Tool-aware project"));
+        } else if (scenario==8) {
+            enqueueTool("duplicate","reminder__get_upcoming_reminders","{}");
+            enqueueTool("duplicate","reminder__get_upcoming_reminders","{}");
+        } else enqueueTool("secret","reminder__create_reminder","{\"text\":\"mock-openai-key-not-real\"}");
+        if (scenario==7) enqueue("{\"accepted\":true}");
+        else if (scenario!=5 && scenario!=8 && scenario!=9) { enqueue("Готово"); enqueue("{\"accepted\":true}"); }
+        const bool success = agent.respond(prompt,answer,error);
+        if (scenario==5) {
+            require(!success && manager.calls().size()==8 && error.find("8 MCP")!=std::string::npos,"Tool limit not enforced");
+        } else if (scenario==8) require(!success && manager.calls().size()==1 && error.find("Duplicate")!=std::string::npos,"Repeated ID executed twice");
+        else if (scenario==9) require(!success && manager.calls().empty() && error.find("secret")!=std::string::npos,"Secret arguments executed");
+        else require(success,error);
+        require(replies.empty(),"Unconsumed model replies");
+        require(scenario==7 ? !agent.taskState().plan.empty() : agent.taskState().plan.empty(),"Task lifecycle routing changed");
+        if (scenario==0) {
+            require(manager.calls().size()==2 && manager.calls()[0].serverId=="codeforces" &&
+                    manager.calls()[1].serverId=="reminder" && manager.calls()[1].success && created==1,"Incorrect two-server flow");
+            require(calls.size()==5 && agent.visibleConversation().size()==2,"Intermediate tool messages leaked into transcript");
+            contains(calls[1].tools,"codeforces__get_new_contests"); contains(calls[1].tools,"reminder__create_reminder");
+            contains(calls[2].messages,"\"tool_call_id\":\"cf_1\""); contains(calls[3].messages,"\"tool_call_id\":\"rem_1\"");
+            contains(calls[4].messages,"Verified tool execution evidence");
+            require(agent.tokenStatistics().inputTokens==500 && agent.completedRequestCount()==1,"Tool request accounting changed turn count or token usage");
+            require(manager.codeforcesClient().serverUrl()==std::getenv("CODEFORCES_MCP_SERVER_URL"),"Reminder env overrode Codeforces URL");
+        } else if (scenario==1) require(manager.calls().empty(),"Greeting invoked tools");
+        else if (scenario==2) require(manager.calls()[0].serverId=="reminder" && manager.calls()[1].serverId=="codeforces","Server order hardcoded");
+        else if (scenario==3) require(manager.calls().size()==1 && created==1,"Tool operation classified as project task");
+        else if (scenario==4) {
+            require(!manager.calls()[0].success && !manager.calls()[1].success,"Tool error not handled");
+            contains(calls[1].messages,"\\\"success\\\":false");
+            contains(calls[2].messages,"Unknown or unavailable MCP tool alias");
+        } else if (scenario==6) {
+            require(manager.calls().size()==1 && manager.calls()[0].success,"Partial server availability blocked all tools");
+            excludes(calls[0].tools,"codeforces__");
+        } else if (scenario==7) require(manager.calls().empty(),"Project planning executed MCP tools");
+        std::cout << "PASS: multi-MCP Agent scenario " << scenario << '\n';
+    }
+    McpClient reminder; McpManager manager(reminder); std::string result,error;
+    require(manager.connectAll(error),error);
+    require(manager.callTool("reminder__shared_name","{}",result,error),error); contains(result,"reminder");
+    require(manager.callTool("codeforces__shared_name","{}",result,error),error); contains(result,"codeforces");
+    require(manager.calls()[0].actualToolName==manager.calls()[1].actualToolName &&
+            manager.calls()[0].serverId!=manager.calls()[1].serverId,"Same-name tool collision");
+    std::cout << "PASS: collision-safe aliases on two real MCP servers\n";
+}
 } // namespace
 
 ApiClient::ApiClient() : initialized_(true) {}
@@ -1373,24 +1473,46 @@ bool ApiClient::isReady() const { return initialized_; }
 bool ApiClient::sendChatCompletion(const std::string& apiKey, const std::string& model,
                                   const std::string& messagesJson, std::string& answer,
                                   std::string& error, bool jsonResponse, ApiTokenUsage* usage,
-                                  std::string* finishReason) const {
+                                  std::string* finishReason, const std::string& toolsJson,
+                                  ApiChatResponse* completion) const {
     require(apiKey == kDummyKey && model == "mock-model", "Test attempted a real-key/model request");
     require(!replies.empty(), "Unexpected mock API call #" + std::to_string(calls.size() + 1));
-    calls.push_back({messagesJson, jsonResponse});
+    calls.push_back({messagesJson, jsonResponse, toolsJson});
     Reply reply = std::move(replies.front()); replies.pop_front();
     answer = reply.success ? reply.answer : "";
     error = reply.success ? "" : "Scripted transport failure";
     if (usage) *usage = reply.usage;
     if (finishReason) *finishReason = reply.finish;
+    if (completion) {
+        completion->content = answer;
+        completion->toolCalls = reply.toolCalls;
+        completion->assistantMessageJson = "{\"role\":\"assistant\",\"content\":\"" + app_json::jsonEscape(answer) + "\"";
+        if (!reply.toolCalls.empty()) {
+            completion->assistantMessageJson += ",\"tool_calls\":[";
+            for (std::size_t i=0; i<reply.toolCalls.size(); ++i) {
+                if (i) completion->assistantMessageJson += ',';
+                const auto& tool = reply.toolCalls[i];
+                completion->assistantMessageJson += "{\"id\":\"" + app_json::jsonEscape(tool.id) +
+                    "\",\"type\":\"function\",\"function\":{\"name\":\"" + app_json::jsonEscape(tool.name) +
+                    "\",\"arguments\":\"" + app_json::jsonEscape(tool.argumentsJson) + "\"}}";
+            }
+            completion->assistantMessageJson += ']';
+        }
+        completion->assistantMessageJson += '}';
+    }
     return reply.success;
 }
 
-int main() {
+int main(int argc, char** argv) {
 #ifdef _WIN32
     _putenv_s("OPENAI_API_KEY", kDummyKey);
 #else
     setenv("OPENAI_API_KEY", kDummyKey, 1);
 #endif
+    if (argc==2 && std::string(argv[1])=="--mcp-integration") {
+        try { testMultiMcpIntegration(); return 0; }
+        catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
+    }
     const std::vector<std::pair<const char*, std::function<void()>>> tests = {
         {"context, summary cadence/merging and token costs", testContextSummaryAndCosts},
         {"failed/truncated summary preserves history and retries", testSummaryFailuresAndRetry},

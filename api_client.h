@@ -2,6 +2,17 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
+
+struct ApiToolCall {
+    std::string id, name, argumentsJson;
+};
+
+struct ApiChatResponse {
+    std::string content;
+    std::string assistantMessageJson;
+    std::vector<ApiToolCall> toolCalls;
+};
 
 struct ApiTokenUsage {
     std::uint64_t inputTokens = 0;
@@ -23,7 +34,11 @@ public:
                             const std::string& messagesJson, std::string& answer,
                             std::string& error, bool jsonResponse = false,
                             ApiTokenUsage* usage = nullptr,
-                            std::string* finishReason = nullptr) const;
+                            std::string* finishReason = nullptr,
+                            const std::string& toolsJson = {},
+                            ApiChatResponse* completion = nullptr) const;
+    static bool parseChatCompletionResponse(const std::string& responseJson,
+                                            ApiChatResponse& completion, std::string& error);
 
 private:
     bool initialized_ = false;

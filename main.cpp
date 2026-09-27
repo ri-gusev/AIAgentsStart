@@ -1,5 +1,6 @@
 #include "agent.h"
 #include "mcp_client.h"
+#include "mcp_manager.h"
 #include "web_server.h"
 
 #include <iostream>
@@ -20,5 +21,7 @@ int main() {
         return 1;
     }
     McpClient mcpClient;
-    return runWebServer(agent, mcpClient);
+    McpManager mcpManager(mcpClient);
+    agent.setMcpManager(&mcpManager);
+    return runWebServer(agent, mcpClient, &mcpManager);
 }

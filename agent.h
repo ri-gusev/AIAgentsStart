@@ -11,8 +11,11 @@
 #include <string>
 #include <vector>
 
+class McpManager;
+
 class Agent {
 public:
+    void setMcpManager(McpManager* manager);
     struct TokenStatistics {
         std::uint64_t inputTokens = 0;
         std::uint64_t cachedInputTokens = 0;
@@ -164,6 +167,8 @@ private:
                             std::string& error);
     bool generateOrdinaryAnswer(const std::string& userMessage, std::string& answer,
                                 std::string& error);
+    bool generateToolAssistedAnswer(const std::string& userMessage, std::string& draft,
+                                   std::string& evidence, std::string& error);
     std::string buildTaskPlanConversation(const std::string& taskRequest) const;
     std::string buildValidationConversation() const;
     std::string buildProjectPauseConversation() const;
@@ -174,7 +179,8 @@ private:
                                 const std::string& answer, std::string& error);
     bool summarizeHistory(std::string& error);
     bool reviewAnswer(const std::string& userMessage, const std::string& draft,
-                      std::string& finalAnswer, std::string& error);
+                      std::string& finalAnswer, std::string& error,
+                      const std::string& toolEvidence = {});
     std::string buildLongTermMemoryPrompt() const;
     std::string buildMemoryDecisionConversation(const std::string& userMessage,
                                                 const std::string& answer) const;
@@ -186,7 +192,9 @@ private:
     bool sendTrackedChatCompletion(const std::string& messagesJson, std::string& answer,
                                    std::string& error, bool jsonResponse,
                                    bool summaryRequest = false,
-                                   std::string* finishReason = nullptr);
+                                   std::string* finishReason = nullptr,
+                                   const std::string& toolsJson = {},
+                                   ApiChatResponse* completion = nullptr);
     void completeAcceptedTurn(const std::string& userMessage, const std::string& answer);
     void appendAssistantEvent(const std::string& message);
     void remember(const std::string& userMessage, const std::string& answer);
@@ -194,6 +202,7 @@ private:
     Config config_;
     std::string apiKey_;
     ApiClient apiClient_;
+    McpManager* mcpManager_ = nullptr;
     std::unique_ptr<MemoryStore> memoryStore_;
     std::unique_ptr<InvariantStore> invariantStore_;
     std::string initializationError_;

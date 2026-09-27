@@ -19,7 +19,7 @@ struct McpToolCallRecord {
 
 class McpClient {
 public:
-    explicit McpClient(std::string serverUrl = "http://127.0.0.1:8000/mcp");
+    explicit McpClient(std::string serverUrl = "http://127.0.0.1:8000/mcp", bool useReminderEnvironment = true);
     ~McpClient();
 
     McpClient(const McpClient&) = delete;

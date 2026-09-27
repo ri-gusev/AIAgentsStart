@@ -2,6 +2,7 @@
 
 #include "agent.h"
 #include "mcp_client.h"
+#include "mcp_manager.h"
 #include "reminder_pipeline.h"
 #include "reminder_store.h"
 #include "reminder_scheduler.h"
@@ -478,7 +479,7 @@ void sendHttpResponse(net::Socket client, int status, const std::string& content
 }
 }
 
-int runWebServer(Agent& agent, McpClient& mcpClient) {
+int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
     net::SocketRuntime runtime;
     if (!runtime.ready()) return 1;
     net::Socket server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -510,6 +511,9 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
         std::lock_guard<std::mutex> lock(reminderEventMutex);
         reminderEvents.broadcast("{\"type\":\"update\"," + buildReminderStateJson(reminderStore).substr(1));
     };
+    if (manager) manager->setSuccessfulCallHandler([&](const RegisteredMcpTool& tool) {
+        if (tool.serverId == "reminder" && tool.actualToolName == "create_reminder") publishReminders();
+    });
     ReminderScheduler reminderScheduler(reminderStore, [&](const std::vector<ReminderNotification>& triggered) {
         std::lock_guard<std::mutex> lock(reminderEventMutex);
         reminderEvents.broadcast("{\"type\":\"triggered\"," + buildReminderStateJson(reminderStore, {}, triggered).substr(1));
@@ -782,6 +786,7 @@ int runWebServer(Agent& agent, McpClient& mcpClient) {
         net::closeSocket(client);
     }
     reminderScheduler.stop();
+    if (manager) manager->setSuccessfulCallHandler({});
     reminderEvents.stop();
     net::closeSocket(server);
     return exitCode;

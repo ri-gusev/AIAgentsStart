@@ -1,4 +1,5 @@
 #include "api_client.h"
+#include "json_value.h"
 
 #include <curl/curl.h>
 
@@ -247,33 +248,98 @@ std::string explainMissingContent(const std::string& json) {
     if (finishReason == "length") error += ". The completion token limit was reached.";
     return error;
 }
+
+std::string buildChatCompletionBody(const std::string& model, const std::string& messagesJson,
+                                    bool jsonResponse, const std::string& toolsJson) {
+    std::string requestMessages = messagesJson;
+    if (jsonResponse && !requestMessages.empty() && requestMessages.front() == '[') {
+        const std::string instruction = "{\"role\":\"system\",\"content\":\"Return one valid JSON object only.\"}";
+        requestMessages.insert(1, instruction + (requestMessages.size() > 2 ? "," : ""));
+    }
+    std::string body = "{\"model\":\"" + jsonEscape(model) + "\",\"messages\":" + requestMessages +
+                       ",\"max_completion_tokens\":" + std::to_string(kMaxCompletionTokens);
+    if (jsonResponse) body += ",\"response_format\":{\"type\":\"json_object\"}";
+    if (!toolsJson.empty() && toolsJson != "[]") {
+        body += ",\"tools\":" + toolsJson + ",\"tool_choice\":\"auto\",\"parallel_tool_calls\":false";
+    }
+    return body + '}';
+}
 }
 
 ApiClient::ApiClient() : initialized_(curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK) {}
 ApiClient::~ApiClient() { if (initialized_) curl_global_cleanup(); }
 bool ApiClient::isReady() const { return initialized_; }
 
+bool ApiClient::parseChatCompletionResponse(const std::string& responseJson,
+                                            ApiChatResponse& completion, std::string& error) {
+    completion = {}; error.clear();
+    app_json::JsonValue root;
+    if (!app_json::JsonParser(responseJson).parse(root, error)) {
+        error = "Invalid OpenAI response JSON"; return false;
+    }
+    const auto* choices = root.member("choices");
+    const auto* message = choices && choices->type == app_json::JsonValue::Type::Array && !choices->array.empty() ?
+        choices->array.front().member("message") : nullptr;
+    const auto* role = message ? message->member("role") : nullptr;
+    if (!message || message->type != app_json::JsonValue::Type::Object || !role ||
+        role->type != app_json::JsonValue::Type::String || role->text != "assistant") {
+        error = "OpenAI response has no assistant message"; return false;
+    }
+    app_json::JsonValue assistant;
+    assistant.type = app_json::JsonValue::Type::Object;
+    assistant.object["role"] = *role;
+    const auto* content = message->member("content");
+    if (content && content->type != app_json::JsonValue::Type::Null &&
+        content->type != app_json::JsonValue::Type::String) {
+        error = "Invalid OpenAI assistant content"; return false;
+    }
+    assistant.object["content"] = content ? *content : app_json::JsonValue{};
+    if (content && content->type == app_json::JsonValue::Type::String) completion.content = content->text;
+    const auto* toolCalls = message->member("tool_calls");
+    if (toolCalls && toolCalls->type != app_json::JsonValue::Type::Null) {
+        if (toolCalls->type != app_json::JsonValue::Type::Array) {
+            error = "Invalid OpenAI tool_calls"; return false;
+        }
+        for (const auto& call : toolCalls->array) {
+            const auto* id = call.member("id");
+            const auto* type = call.member("type");
+            const auto* function = call.member("function");
+            const auto* name = function ? function->member("name") : nullptr;
+            const auto* arguments = function ? function->member("arguments") : nullptr;
+            const auto validString = [](const auto* value) {
+                return value && value->type == app_json::JsonValue::Type::String;
+            };
+            if (!validString(id) || id->text.empty() || !validString(type) || type->text != "function" ||
+                !validString(name) || name->text.empty() || !validString(arguments)) {
+                error = "Invalid OpenAI function tool call"; return false;
+            }
+            for (const auto& previous : completion.toolCalls) if (previous.id == id->text) {
+                error = "Duplicate OpenAI tool_call ID"; return false;
+            }
+            completion.toolCalls.push_back({id->text, name->text, arguments->text});
+        }
+        assistant.object["tool_calls"] = *toolCalls;
+    }
+    if (completion.content.empty() && completion.toolCalls.empty()) {
+        error = "OpenAI response contains neither content nor tool calls"; return false;
+    }
+    completion.assistantMessageJson = app_json::serializeJson(assistant);
+    return true;
+}
+
 bool ApiClient::sendChatCompletion(const std::string& apiKey, const std::string& model,
                                    const std::string& messagesJson, std::string& answer,
                                    std::string& error, bool jsonResponse,
                                    ApiTokenUsage* usage,
-                                   std::string* finishReason) const {
+                                   std::string* finishReason, const std::string& toolsJson,
+                                   ApiChatResponse* completion) const {
     answer.clear();
     error.clear();
     if (usage) *usage = {};
     if (finishReason) finishReason->clear();
+    if (completion) *completion = {};
     if (!initialized_) { error = "Could not initialize libcurl"; return false; }
-    std::string requestMessages = messagesJson;
-    if (jsonResponse && !requestMessages.empty() && requestMessages.front() == '[') {
-        const std::string jsonInstruction =
-            "{\"role\":\"system\",\"content\":\"Return one valid JSON object only.\"}";
-        requestMessages.insert(1, jsonInstruction +
-                                      (requestMessages.size() > 2 ? "," : ""));
-    }
-    std::string body = "{\"model\":\"" + jsonEscape(model) + "\",\"messages\":" + requestMessages +
-                       ",\"max_completion_tokens\":" + std::to_string(kMaxCompletionTokens);
-    if (jsonResponse) body += ",\"response_format\":{\"type\":\"json_object\"}";
-    body += '}';
+    const std::string body = buildChatCompletionBody(model, messagesJson, jsonResponse, toolsJson);
     CURL* curl = curl_easy_init();
     if (!curl) { error = "Could not initialize libcurl"; return false; }
     std::string response;
@@ -308,6 +374,11 @@ bool ApiClient::sendChatCompletion(const std::string& apiKey, const std::string&
     }
     if (usage) extractTokenUsage(response, *usage);
     if (finishReason) *finishReason = extractFinishReason(response);
+    if (completion) {
+        if (!parseChatCompletionResponse(response, *completion, error)) return false;
+        answer = completion->content;
+        return true;
+    }
     answer = extractContent(response);
     if (answer.empty()) { error = explainMissingContent(response); return false; }
     return true;

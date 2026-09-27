@@ -1,5 +1,82 @@
 # C++ Agent Chat
 
+## Day 20 — Stage 2: multi-MCP routing and Agent tool loop
+
+`McpManager` wraps the existing `McpClient` transport. It borrows the same Reminder client used by the UI and Day 19 pipeline and owns a separate Codeforces client. Registrations:
+
+- `reminder`: `MCP_SERVER_URL`, default `http://127.0.0.1:8000/mcp` (backward compatible).
+- `codeforces`: `CODEFORCES_MCP_SERVER_URL`, default `http://127.0.0.1:8001/mcp`.
+
+Before a tool-aware chat request, each client connects/initializes or refreshes `tools/list`. One unavailable server does not disable tools on the other. The model-visible registry retains alias, server ID, real tool name, description and input schema. Aliases such as `reminder__create_reminder` and `codeforces__get_new_contests` avoid collisions; only the original name is sent to that server's `tools/call`.
+
+The existing OpenAI Chat Completions transport now sends registry schemas with `tool_choice: auto` and `parallel_tool_calls: false`. The existing Agent implements the iterative loop:
+
+```text
+User -> OpenAI + schemas -> assistant tool_calls?
+  no  -> existing output-policy review -> final answer
+  yes -> McpManager -> selected MCP server -> tools/call
+      -> role:tool + tool_call_id + result -> next OpenAI request
+```
+
+The model chooses the tool, arguments, order and stopping point; there is no fixed Codeforces -> Reminder workflow. Up to 8 tool-call attempts are permitted per chat turn. Tool errors are returned to the model as structured error JSON. Duplicate call IDs and secret-bearing arguments are rejected. Intermediate tool messages remain ephemeral: only the existing user/final-answer history is retained, with existing memory, output review, invariants and personalization. All model requests count toward existing token usage; they do not count as extra accepted user turns.
+
+Requests that the existing heuristic considers project tasks are classified by the model against the available tool catalog before routing: a tool operation is ordinary chat; actual project work still follows the existing lifecycle and explicit buttons. PAUSED/DONE and policy guards remain in force. Planning, summaries and output-policy review cannot call tools. Successful Agent-created reminders publish through the existing update event so the normal reminder list continues updating. Scheduler and event formats are unchanged.
+
+### Launch from the project root
+
+Stop an old backend before rebuilding. In PowerShell:
+
+```powershell
+$env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
+cmake --preset mingw-debug
+cmake --build --preset mingw-debug
+# OPENAI_API_KEY must already be set in this terminal's environment.
+.\build\mingw-debug\openai_cli.exe
+```
+
+Start Reminder and Codeforces MCP in separate terminals (with a working MCP environment):
+
+```powershell
+.\.venv-mcp\Scripts\python.exe mcp_server\server.py
+.\.venv-codeforces\Scripts\python.exe codeforces_mcp_server\server.py
+```
+
+Fallback for this Windows checkout's broken venv launchers, using already-installed packages:
+
+```powershell
+# Terminal 1
+py -3.11 -s -c "import site,runpy;site.addsitedir(r'.venv-mcp-run\Lib\site-packages');runpy.run_module('mcp_server.server',run_name='__main__')"
+# Terminal 2
+py -3.11 -s -c "import site,runpy;site.addsitedir(r'.venv-mcp-run\Lib\site-packages');runpy.run_module('codeforces_mcp_server.server',run_name='__main__')"
+```
+
+Ubuntu uses ordinary CMake and `.venv-mcp/bin/python` / `.venv-codeforces/bin/python` as documented below. No new dependencies or model changes are required.
+
+### Manual chat check
+
+Open `http://127.0.0.1:8080` and use the existing chat. Manager connects both servers automatically; the existing MCP UI still represents Reminder only until Stage 4.
+
+1. Ask `Привет`: no tool call is needed.
+2. Ask `Выполни синхронизацию соревнований Codeforces`: the model can choose `codeforces__sync_contests`. First successful sync creates a baseline with no new contests. There is no hourly watcher until Stage 3.
+3. When the latest successful delta contains a contest starting more than 24 hours from now, ask:
+
+   `Какие новые соревнования Codeforces появились при последней проверке? Для ближайшего из них создай мне напоминание за сутки до начала.`
+
+   Expected model-selected calls: `codeforces__get_new_contests`, then `reminder__create_reminder`; check the final chat answer and normal reminder list. Empty delta means no reminder should be created. If start minus 24 hours is already in the past, the reminder tool rejects that time; the model must explain this rather than claim success.
+
+### Verification boundaries and reproducible tests
+
+The build and CTest suite include the real OpenAI request/response parser, existing Agent memory/policy regressions, MCP parser, Day 19 pipeline and socket/WebSocket tests. For tests, configure `BUILD_TESTING=ON`.
+
+```powershell
+ctest --test-dir build/day20-tests --output-on-failure
+py -3.11 -s -c "import site,runpy;site.addsitedir(r'.venv-mcp-run\Lib\site-packages');runpy.run_path('tests/day20_stage2_integration.py',run_name='__main__')"
+```
+
+`tests/day20_stage2_integration.py` runs two real SDK servers on free ports 18020/18021 and the existing Agent test executable with scripted OpenAI replies. It seeds an explicitly labeled Codeforces test delta in a temporary database, never calls an external mock API, and makes no paid model requests. It verifies two-server routing, argument/result correlation, contest start minus 24 hours in the Reminder DB, reverse tool order, greeting, error feedback, loop limit, same-name aliases, partial availability, lifecycle classification and credential rejection. Additional same-name tools exist only in the test fixtures, not production servers. Use `--executable` to select the `agent_tests` binary from another build directory.
+
+A scripted model test proves the loop/transport, not the quality of a live model's choices. A live OpenAI chat check requires `OPENAI_API_KEY` in the backend terminal. This Stage 2 implementation does not add the Stage 3 watcher or Stage 4 UI and does not remove the deterministic Day 19 pipeline.
+
 ## Day 19 — композиция MCP reminders
 
 Новый `ReminderPipeline` находится в `reminder_pipeline.h/.cpp` рядом с существующим `McpClient`, вне Agent. `GET /api/reminders/overview` выполняет ровно три последовательных `tools/call`:
