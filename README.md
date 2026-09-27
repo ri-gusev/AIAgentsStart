@@ -122,7 +122,7 @@ User -> OpenAI + schemas -> assistant tool_calls?
 
 The model chooses the tool, arguments, order and stopping point; there is no fixed Codeforces -> Reminder workflow. Up to 8 tool-call attempts are permitted per chat turn. Tool errors are returned to the model as structured error JSON. Duplicate call IDs and secret-bearing arguments are rejected. Intermediate tool messages remain ephemeral: only the existing user/final-answer history is retained, with existing memory, output review, invariants and personalization. All model requests count toward existing token usage; they do not count as extra accepted user turns.
 
-Requests that the existing heuristic considers project tasks are classified by the model against the available tool catalog before routing: a tool operation is ordinary chat; actual project work still follows the existing lifecycle and explicit buttons. PAUSED/DONE and policy guards remain in force. Planning, summaries and output-policy review cannot call tools. Successful Agent-created reminders publish through the existing update event so the normal reminder list continues updating. Scheduler and event formats are unchanged.
+With McpManager attached, every accepted message first receives a model routing decision: `project_task`, `chat`, or `mcp`. Imperatives alone do not select project work, and unavailable tools never cause fallback into planning. The router does not execute tools. Only `project_task` enters the existing lifecycle and its PAUSED/DONE guards; `chat` and `mcp` go directly to the ordinary response/tool loop and cannot create/revise plans or change task state. Explicit lifecycle transitions through chat remain forbidden; use the existing buttons. Input policies, invariants, output-policy review and memory handling are preserved. Ordinary/tool-loop requests and their review omit project state, plans and paused-project summaries. Planning, summaries and output-policy review cannot call tools. Successful Agent-created reminders publish through the existing update event so the normal reminder list continues updating. Scheduler and event formats are unchanged.
 
 ### Launch from the project root
 
@@ -608,7 +608,7 @@ API-ключ не должен находиться в JSON. Agent читает 
 
 Статистика общая для всех чатов и накапливается для всех полученных API usage текущего запуска: основной ответ, output policy, автоматическое распределение памяти и summarization. Создание, переключение и удаление чатов и сохранение персонализации не вызывают OpenAI и не увеличивают счётчики токенов.
 
-Обычный успешный запрос требует 3 LLM-вызова: основной ответ, output policy и автоматический memory router. Когда обновляется summary, добавляется ещё один вызов. Подозрительный ввод пропускает автоматический router, а ошибки и повторы могут менять фактическое число вызовов.
+При подключённом McpManager обычный успешный запрос без tool calls требует 4 LLM-вызова: выбор маршрута, основной ответ, output policy и автоматический memory router. В manual memory mode последний вызов отсутствует. Каждый tool result может добавлять следующий запрос к модели; при обновлении summary добавляется ещё один вызов. Подозрительный ввод пропускает автоматический memory router, а ошибки и повторы могут менять фактическое число вызовов.
 
 - **Input context** — входные токены всех учитываемых вызовов и оценка их стоимости; это не только последний пользовательский вопрос.
 - **Summary usage** — входные и выходные токены отдельного summarization-вызова и его стоимость.

@@ -180,15 +180,15 @@ private:
     bool summarizeHistory(std::string& error);
     bool reviewAnswer(const std::string& userMessage, const std::string& draft,
                       std::string& finalAnswer, std::string& error,
-                      const std::string& toolEvidence = {});
+                      const std::string& toolEvidence = {}, bool includeTaskContext = true);
     std::string buildLongTermMemoryPrompt() const;
     std::string buildMemoryDecisionConversation(const std::string& userMessage,
                                                 const std::string& answer) const;
-    std::string buildConversation(const std::string& userMessage) const;
+    std::string buildConversation(const std::string& userMessage, bool includeTaskContext = true) const;
     std::string buildReviewConversation(const std::string& userMessage,
-                                        const std::string& draft) const;
+                                        const std::string& draft, bool includeTaskContext = true) const;
     std::string buildSummaryConversation(std::size_t messageCount) const;
-    void appendContext(std::string& messages, bool& first) const;
+    void appendContext(std::string& messages, bool& first, bool includeTaskContext = true) const;
     bool sendTrackedChatCompletion(const std::string& messagesJson, std::string& answer,
                                    std::string& error, bool jsonResponse,
                                    bool summaryRequest = false,

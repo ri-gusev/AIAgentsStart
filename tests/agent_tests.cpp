@@ -1386,22 +1386,49 @@ std::string futureReminderArguments() {
 }
 
 void testMultiMcpIntegration() {
-    for (int scenario = 0; scenario < 10; ++scenario) {
+    for (int scenario = 0; scenario < 14; ++scenario) {
         resetMock();
-        Fixture fixture; Agent agent(fixture.config.string());
+        Fixture fixture;
+        if (scenario >= 10) {
+            Agent seed(fixture.config.string());
+            MemoryStore store(fixture.database.string()); std::string error;
+            ProjectTaskState state;
+            state.plan = structuredPlan("Existing unrelated project");
+            require(store.commitTaskTransition(seed.activeChatId(), "PLANNING", "CREATE_TASK", state, nullptr, error), error);
+            state.state = "EXECUTION";
+            require(store.commitTaskTransition(seed.activeChatId(), "PLANNING", "APPROVE_PLAN", state, nullptr, error), error);
+            if (scenario == 10) {
+                state.state = "PAUSED"; state.resumeState = "EXECUTION";
+                const std::string summary = "Unrelated paused project summary";
+                require(store.commitTaskTransition(seed.activeChatId(), "EXECUTION", "PAUSE", state, &summary, error), error);
+            } else if (scenario != 12) {
+                state.state = "VALIDATION"; state.executionCompleted = true;
+                require(store.commitTaskTransition(seed.activeChatId(), "EXECUTION", "EXECUTION_FINISHED", state, nullptr, error), error);
+                if (scenario == 11) {
+                    state.state = "DONE"; state.validationPassed = true;
+                    require(store.commitTaskTransition(seed.activeChatId(), "VALIDATION", "VALIDATION_PASSED", state, nullptr, error), error);
+                }
+            }
+        }
+        Agent agent(fixture.config.string());
         std::string answer, error;
         require(agent.isReady() && agent.setMemoryMode("manual",error),error);
         McpClient reminder;
         McpManager manager(reminder, scenario==6 ? "http://127.0.0.1:1/mcp" : "");
         agent.setMcpManager(&manager);
+        const auto originalTask = agent.taskState();
+        MemoryStore observer(fixture.database.string());
+        std::vector<TaskTransitionLog> beforeTransitions, afterTransitions;
+        require(observer.loadTaskTransitionLog(agent.activeChatId(), beforeTransitions, error), error);
         unsigned created = 0;
         manager.setSuccessfulCallHandler([&](const auto& tool) {
             if (tool.serverId=="reminder" && tool.actualToolName=="create_reminder") ++created;
         });
         std::string prompt = "Покажи данные инструментов";
+        enqueue(scenario == 7 ? "{\"route\":\"project_task\"}" : scenario == 1 ?
+            "{\"route\":\"chat\"}" : "{\"route\":\"mcp\"}");
         if (scenario==0) {
             prompt = "Какие новые соревнования Codeforces появились при последней проверке? Для ближайшего из них создай мне напоминание за сутки до начала.";
-            enqueue("{\"use_tools\":true}");
             enqueueTool("cf_1","codeforces__get_new_contests","{}");
             enqueueTool("rem_1","reminder__create_reminder",futureReminderArguments());
         } else if (scenario==1) prompt = "Привет";
@@ -1410,7 +1437,6 @@ void testMultiMcpIntegration() {
             enqueueTool("c","codeforces__get_new_contests","{}");
         } else if (scenario==3) {
             prompt = "Создай напоминание";
-            enqueue("{\"use_tools\":true}");
             enqueueTool("create","reminder__create_reminder",futureReminderArguments());
         } else if (scenario==4) {
             enqueueTool("invalid","reminder__create_reminder","{\"text\":\"bad\",\"run_at\":\"2000-01-01T00:00:00Z\"}");
@@ -1420,11 +1446,15 @@ void testMultiMcpIntegration() {
         } else if (scenario==6) enqueueTool("available","reminder__get_upcoming_reminders","{}");
         else if (scenario==7) {
             prompt = "Реализуй приложение для сортировки файлов";
-            enqueue("{\"use_tools\":false}"); enqueue(structuredPlan("Tool-aware project"));
+            enqueue(structuredPlan("Tool-aware project"));
         } else if (scenario==8) {
             enqueueTool("duplicate","reminder__get_upcoming_reminders","{}");
             enqueueTool("duplicate","reminder__get_upcoming_reminders","{}");
-        } else enqueueTool("secret","reminder__create_reminder","{\"text\":\"mock-openai-key-not-real\"}");
+        } else if (scenario == 9) enqueueTool("secret","reminder__create_reminder","{\"text\":\"mock-openai-key-not-real\"}");
+        else {
+            prompt = "Подготовь сводку напоминаний";
+            enqueueTool("overview","reminder__get_upcoming_reminders","{}");
+        }
         if (scenario==7) enqueue("{\"accepted\":true}");
         else if (scenario!=5 && scenario!=8 && scenario!=9) { enqueue("Готово"); enqueue("{\"accepted\":true}"); }
         const bool success = agent.respond(prompt,answer,error);
@@ -1434,7 +1464,21 @@ void testMultiMcpIntegration() {
         else if (scenario==9) require(!success && manager.calls().empty() && error.find("secret")!=std::string::npos,"Secret arguments executed");
         else require(success,error);
         require(replies.empty(),"Unconsumed model replies");
-        require(scenario==7 ? !agent.taskState().plan.empty() : agent.taskState().plan.empty(),"Task lifecycle routing changed");
+        if (scenario == 7) require(!agent.taskState().plan.empty(), "Project task did not enter lifecycle");
+        else {
+            require(agent.taskState().plan == originalTask.plan && agent.taskState().state == originalTask.state &&
+                agent.taskState().executionCompleted == originalTask.executionCompleted &&
+                agent.taskState().validationPassed == originalTask.validationPassed, "MCP/chat changed project task");
+            ProjectTaskState persisted;
+            require(observer.loadTaskState(agent.activeChatId(), persisted, error) && persisted.plan == originalTask.plan &&
+                persisted.state == originalTask.state && observer.loadTaskTransitionLog(agent.activeChatId(), afterTransitions, error) &&
+                beforeTransitions.size() == afterTransitions.size(), "MCP/chat persisted a task transition");
+            for (std::size_t index = 1; index < calls.size(); ++index) {
+                excludes(calls[index].messages, "Task state machine data for the current project");
+                excludes(calls[index].messages, "Existing unrelated project objective");
+                excludes(calls[index].messages, "Unrelated paused project summary");
+            }
+        }
         if (scenario==0) {
             require(manager.calls().size()==2 && manager.calls()[0].serverId=="codeforces" &&
                     manager.calls()[1].serverId=="reminder" && manager.calls()[1].success && created==1,"Incorrect two-server flow");
@@ -1449,11 +1493,11 @@ void testMultiMcpIntegration() {
         else if (scenario==3) require(manager.calls().size()==1 && created==1,"Tool operation classified as project task");
         else if (scenario==4) {
             require(!manager.calls()[0].success && !manager.calls()[1].success,"Tool error not handled");
-            contains(calls[1].messages,"\\\"success\\\":false");
-            contains(calls[2].messages,"Unknown or unavailable MCP tool alias");
+            contains(calls[2].messages,"\\\"success\\\":false");
+            contains(calls[3].messages,"Unknown or unavailable MCP tool alias");
         } else if (scenario==6) {
             require(manager.calls().size()==1 && manager.calls()[0].success,"Partial server availability blocked all tools");
-            excludes(calls[0].tools,"codeforces__");
+            excludes(calls[1].tools,"codeforces__");
         } else if (scenario==7) require(manager.calls().empty(),"Project planning executed MCP tools");
         std::cout << "PASS: multi-MCP Agent scenario " << scenario << '\n';
     }
