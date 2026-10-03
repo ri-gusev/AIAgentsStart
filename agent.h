@@ -34,12 +34,19 @@ public:
         double summaryUsd = 0.0;
     };
 
+    struct RagSource {
+        std::string file;
+        std::string section;
+        std::string chunkId;
+    };
+
     struct ChatMessage {
         std::string role;
         std::string content;
         std::string id;
         bool workingSaved = false;
         bool longTermSaved = false;
+        std::vector<RagSource> ragSources;
     };
 
     explicit Agent(const std::string& configPath = "agent_config.local.json");
@@ -90,7 +97,9 @@ public:
     bool respondInChat(const std::string& chatId, const std::string& userMessage,
                        std::string& answer, std::string& error);
     bool handleChatMessage(const std::string& chatId, const std::string& userMessage,
-                           std::string& answer, std::string& error);
+                           std::string& answer, std::string& error,
+                           const std::string& retrievalContext = {},
+                           const std::vector<RagSource>& sources = {});
     bool generateTaskPlan(const std::string& taskRequest, std::string& plan,
                           std::string& error);
     bool performTaskAction(const std::string& action, std::string& error);
@@ -203,6 +212,8 @@ private:
     void remember(const std::string& userMessage, const std::string& answer);
 
     Config config_;
+    std::string retrievalContext_;
+    std::vector<RagSource> retrievalSources_;
     std::string apiKey_;
     ApiClient apiClient_;
     McpManager* mcpManager_ = nullptr;

@@ -4,6 +4,11 @@ const sendButton = document.querySelector('#sendButton');
 const chatLog = document.querySelector('#chatLog');
 const memoryDescription = document.querySelector('#memoryDescription');
 const chatNotice = document.querySelector('#chatNotice');
+const ragToggle = document.querySelector('#ragToggle');
+const ragReindex = document.querySelector('#ragReindex');
+const ragStatus = document.querySelector('#ragStatus');
+let ragEnabled = false;
+let ragIndexing = false;
 const chatSelect = document.querySelector('#chatSelect');
 const chatModeButtons = document.querySelectorAll('[data-chat-mode]');
 const chatModeDescription = document.querySelector('#chatModeDescription');
@@ -355,6 +360,8 @@ function openDeleteConfirmation() {
 
 function updateControlState() {
   const busy = requestPending;
+  ragToggle.disabled = busy;
+  ragReindex.disabled = busy || ragIndexing;
   const taskLocked = activeChatMode === 'task' && (currentTask.state === 'PAUSED' || currentTask.state === 'DONE');
   sendButton.disabled = busy || !activeChatId || taskLocked;
   input.disabled = busy || taskLocked;
@@ -488,7 +495,8 @@ function renderConversation(messages = [], keepPosition = false) {
     }
   } else {
     messages.forEach((item) => {
-      addMessage(item.role, item.content, false);
+      const message = addMessage(item.role, item.content, false);
+      if (item.role === 'assistant') renderRagSources(message, item.rag_sources);
     });
   }
   if (keepPosition) chatLog.scrollTop = previousTop;
@@ -718,6 +726,7 @@ function safeTransitionError(value, fallback) {
 async function askAgent(question) {
   if (requestPending || !activeChatId) return;
   const requestChatId = activeChatId;
+  const useRag = ragEnabled;
   const pendingMessage = addMessage('loading');
   requestPending = true;
   updateControlState();
@@ -726,18 +735,26 @@ async function askAgent(question) {
   input.style.height = 'auto';
   renderNotice();
   try {
-    const response = await fetch('/api/chat', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: requestChatId, message: question })
-    });
-    const data = await response.json();
+    let response, data;
+    while (true) {
+      response = await fetch('/api/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: requestChatId, message: question, rag: useRag })
+      });
+      data = await response.json();
+      if (response.status !== 202 || !data.rag_indexing) break;
+      pendingMessage.querySelector('.message-role').textContent = 'Создаём индекс проекта…';
+      await waitForRagIndex();
+      pendingMessage.querySelector('.message-role').textContent = 'Agent';
+    }
     if (!response.ok) {
       pendingMessage.remove();
       const serverError = typeof data.error === 'string' ? data.error : '';
       const openaiStatus = /OpenAI API returned HTTP (\d{3})/.exec(serverError);
       const openaiParam = /; param=(tools|messages|model|tool_choice|parallel_tool_calls|response_format|max_completion_tokens|max_tokens)(?:;|$)/.exec(serverError);
       const lifecycleError = data.input_rejected && /^(Переход между этапами|Task stages can change|Task changes are not allowed|Task is paused|Task is complete|Create a plan|Complete execution|Only an executing task)/.test(serverError);
-      const error = lifecycleError ? serverError : data.input_rejected
+      const error = data.rag_error ? 'RAG: ' + (serverError || 'Не удалось получить контекст проекта.')
+        : lifecycleError ? serverError : data.input_rejected
         ? 'Сообщение отклонено input policy. Уберите секреты или запросы на выполнение опасных команд.'
         : openaiStatus ? 'Ошибка OpenAI: HTTP ' + openaiStatus[1] +
           (openaiParam ? ' · параметр ' + openaiParam[1] : '') + '. Подробности — в ответе /api/chat.'
@@ -751,9 +768,10 @@ async function askAgent(question) {
       return;
     }
     if (!renderAgentState(data)) throw new Error('State response missing');
-  } catch {
+  } catch (error) {
     pendingMessage.remove();
-    addMessage('error', 'Не удалось связаться с сервером. Сообщение не добавлено в видимую историю.');
+    addMessage('error', error.ragError ? 'RAG: ' + error.message
+      : 'Не удалось связаться с сервером. Сообщение не добавлено в видимую историю.');
   } finally {
     requestPending = false;
     updateControlState();
@@ -968,87 +986,82 @@ setInterval(() => { if (!document.hidden) refreshMcpServers(); }, 15000);
 // the first click on actions such as project deletion. Every mutation already
 // returns the complete current Agent state.
 
-// Local document index: browser talks only to the C++ backend.
-const indexStatus = document.querySelector('#ollamaStatus');
-const indexError = document.querySelector('#indexError');
-const indexJob = document.querySelector('#indexJob');
-const indexResults = document.querySelector('#documentSearchResults');
-let indexBusy = false;
-function indexErrorMessage(message) { indexError.textContent = message; indexError.hidden = !message; }
-function renderIndexStats(strategy, stats) {
-  const element = document.querySelector(strategy === 'fixed' ? '#fixedIndexStats' : '#structuralIndexStats');
-  element.textContent = !stats ? 'Ещё не индексирован' : `${stats.chunk_count} chunks · средний размер ${stats.avg_chunk_chars} · ${stats.elapsed_ms} ms · dim ${stats.embedding_dim}`;
+// Retrieval stays in the existing chat flow. Only source metadata reaches this UI.
+function renderRagSources(message, sources) {
+  if (!Array.isArray(sources) || !sources.length) return;
+  const details = document.createElement('details');
+  details.className = 'rag-sources';
+  const summary = document.createElement('summary');
+  summary.textContent = 'Источники RAG';
+  const list = document.createElement('ul');
+  const seen = new Set();
+  sources.forEach((source) => {
+    const label = String(source.file || '') + ' — ' + String(source.section || 'Общий раздел');
+    if (seen.has(label)) return;
+    seen.add(label);
+    const item = document.createElement('li');
+    item.textContent = label;
+    list.append(item);
+  });
+  details.append(summary, list);
+  message.append(details);
 }
-async function refreshDocumentIndex() {
+
+function showRagStatus(text, failed = false) {
+  ragStatus.textContent = text;
+  ragStatus.hidden = !text;
+  ragStatus.classList.toggle('failed', failed);
+}
+
+async function waitForRagIndex() {
+  ragIndexing = true;
+  updateControlState();
   try {
-    const response = await fetch('/api/document-index/status', { cache: 'no-store' });
-    const data = await response.json();
-    indexStatus.textContent = data.ollama.online ? '● Online' : '● Offline';
-    indexStatus.dataset.online = String(data.ollama.online);
-    document.querySelector('#indexModel').textContent = `${data.model} · ${data.database}`;
-    document.querySelector('#indexFiles').textContent = String(data.corpus.file_count);
-    document.querySelector('#indexLines').textContent = Number(data.corpus.total_lines).toLocaleString();
-    document.querySelector('#indexChars').textContent = Number(data.corpus.total_characters).toLocaleString();
-    renderIndexStats('fixed', data.fixed); renderIndexStats('structural', data.structural);
-    indexBusy = !!data.job.running;
-    indexJob.hidden = !indexBusy && !data.job.error;
-    const percent = data.job.total ? Math.round(100 * data.job.progress / data.job.total) : 0;
-    document.querySelector('#indexProgress').value = percent;
-    document.querySelector('#indexPhase').textContent = data.job.running
-      ? `${data.job.phase}${data.job.total ? ` ${data.job.progress}/${data.job.total}` : ''}` : data.job.phase;
-    document.querySelectorAll('[data-index-strategy], #indexBothButton').forEach((button) => { button.disabled = indexBusy || !data.ollama.online; });
-    if (data.job.error) indexErrorMessage(`${data.job.error}${data.ollama.online ? '' : ' — проверьте локальный Ollama.'}`);
-    else if (!data.ollama.online) indexErrorMessage('Ollama недоступна. Проверьте локальный сервис и модель bge-m3.');
-    else if (indexError.textContent.startsWith('Ollama недоступна.')) indexErrorMessage('');
-  } catch { indexStatus.textContent = 'Статус недоступен'; }
-}
-async function startDocumentIndex(strategy) {
-  indexErrorMessage('');
-  try {
-    const response = await fetch('/api/document-index/index', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ strategy }) });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Не удалось запустить индексацию');
-    await refreshDocumentIndex();
-  } catch (error) { indexErrorMessage(error.message); }
-}
-document.querySelectorAll('[data-index-strategy]').forEach((button) => button.addEventListener('click', () => startDocumentIndex(button.dataset.indexStrategy)));
-document.querySelector('#indexBothButton').addEventListener('click', () => startDocumentIndex('both'));
-function appendDocumentResult(parent, result, index) {
-  const details = document.createElement('details'); details.className = 'document-result';
-  const summary = document.createElement('summary'); summary.textContent = `${index + 1}. ${Number(result.score).toFixed(3)} · ${result.file}${result.section ? ` · ${result.section}` : ''}`;
-  const preview = document.createElement('p'); preview.textContent = result.content.slice(0, 240);
-  const content = document.createElement('p'); content.textContent = result.content;
-  const meta = document.createElement('small'); meta.textContent = `source: ${result.source} · file: ${result.file} · section: ${result.section || '—'} · chunk_id: ${result.chunk_id} · strategy: ${result.strategy} · similarity: ${Number(result.score).toFixed(4)}`;
-  details.append(summary, preview, content, meta); parent.append(details);
-}
-function renderDocumentResults(data, compare) {
-  indexResults.replaceChildren();
-  if (compare) {
-    const columns = document.createElement('div'); columns.className = 'document-compare';
-    for (const strategy of ['fixed', 'structural']) {
-      const section = document.createElement('section'); const heading = document.createElement('strong'); heading.textContent = strategy.toUpperCase(); section.append(heading);
-      const stats = data[strategy].stats;
-      const summary = document.createElement('p'); summary.textContent = stats ? `${stats.chunk_count} chunks · avg ${stats.avg_chunk_chars} chars · ${stats.elapsed_ms} ms · dim ${stats.embedding_dim}` : 'Индекс ещё не создан'; section.append(summary);
-      data[strategy].results.forEach((result, i) => appendDocumentResult(section, result, i)); columns.append(section);
+    while (true) {
+      const response = await fetch('/api/rag/status', { cache: 'no-store' });
+      if (!response.ok) throw new Error('Статус индекса недоступен.');
+      const state = await response.json();
+      if (state.error) throw new Error(state.error);
+      if (!state.running) {
+        if (!state.ready) throw new Error('Индекс не создан. Повторите Reindex.');
+        showRagStatus('Индекс готов.');
+        return;
+      }
+      showRagStatus('Индексация: ' + (state.phase || '…') +
+        (state.total ? ' · ' + state.progress + ' / ' + state.total : ''));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    indexResults.append(columns);
-  } else data.results.forEach((result, i) => appendDocumentResult(indexResults, result, i));
+  } catch (error) {
+    showRagStatus(error.message, true);
+    error.ragError = true;
+    throw error;
+  } finally {
+    ragIndexing = false;
+    updateControlState();
+  }
 }
-async function searchDocumentIndex(compare) {
-  const query = document.querySelector('#documentQuery').value.trim();
-  if (!query) { indexErrorMessage('Введите поисковый запрос.'); return; }
-  indexErrorMessage(''); indexResults.textContent = 'Ищем…';
+
+ragToggle.addEventListener('click', () => {
+  ragEnabled = !ragEnabled;
+  ragToggle.textContent = ragEnabled ? 'RAG ON' : 'RAG OFF';
+  ragToggle.setAttribute('aria-checked', String(ragEnabled));
+  if (!ragIndexing) showRagStatus(ragEnabled ? 'Ответы с контекстом исходников проекта.' : '');
+});
+
+ragReindex.addEventListener('click', async () => {
+  if (requestPending || ragIndexing) return;
+  ragIndexing = true;
+  updateControlState();
+  showRagStatus('Перестраиваем индекс проекта…');
   try {
-    const endpoint = compare ? '/api/document-index/compare' : '/api/document-index/search';
-    const payload = { query, top_k: Number(document.querySelector('#documentTopK').value) || 5 };
-    if (!compare) payload.strategy = document.querySelector('#documentStrategy').value;
-    const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const response = await fetch('/api/rag/reindex', { method: 'POST' });
     const data = await response.json();
-    if (!response.ok && !(compare && data.fixed && data.structural)) throw new Error(data.error || 'Поиск завершился ошибкой');
-    renderDocumentResults(data, compare);
-  } catch (error) { indexResults.replaceChildren(); indexErrorMessage(error.message); }
-}
-document.querySelector('#documentSearchForm').addEventListener('submit', (event) => { event.preventDefault(); searchDocumentIndex(false); });
-document.querySelector('#compareStrategiesButton').addEventListener('click', () => searchDocumentIndex(true));
-refreshDocumentIndex();
-setInterval(() => { if (!document.hidden) refreshDocumentIndex(); }, 1500);
+    if (!response.ok) throw new Error(data.error || 'Не удалось запустить индексацию.');
+    await waitForRagIndex();
+  } catch (error) {
+    showRagStatus(error.message, true);
+  } finally {
+    ragIndexing = false;
+    updateControlState();
+  }
+});

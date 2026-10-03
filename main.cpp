@@ -14,7 +14,7 @@ int main() {
 #ifdef _WIN32
     SetConsoleCP(CP_UTF8);
     SetConsoleOutputCP(CP_UTF8);
-#endif
+#endif ---------------------------------------------------------------------------------------
     Agent agent;
     if (!agent.isReady()) {
         std::cerr << agent.initializationError() << '\n';

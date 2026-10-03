@@ -59,7 +59,12 @@
             <span>ONE AGENT / THREE MEMORIES</span>
             <div class="question-title-row">
               <h2 id="activeChatName">Чат</h2>
+              <div class="rag-controls" role="group" aria-label="Поиск по проекту">
+                <button id="ragToggle" class="secondary-button" type="button" role="switch" aria-checked="false">RAG OFF</button>
+                <button id="ragReindex" class="rag-reindex" type="button" title="Перестроить индекс исходников проекта">Reindex</button>
+              </div>
             </div>
+            <p id="ragStatus" class="rag-status" role="status" hidden></p>
             <p id="memoryDescription">У каждого чата свой диалог и рабочая память. Долговременные факты общие.</p>
           </div>
         </section>
@@ -177,25 +182,6 @@
           </div>
         </section>
 
-        <section class="side-card document-index-panel" aria-labelledby="documentIndexTitle">
-          <div class="mcp-heading"><h3 id="documentIndexTitle">Document Index</h3><span id="ollamaStatus" class="index-status">Проверка…</span></div>
-          <p id="indexModel" class="index-muted">bge-m3 · локально</p>
-          <dl class="index-corpus-stats"><div><dt>Файлы</dt><dd id="indexFiles">0</dd></div><div><dt>Строки</dt><dd id="indexLines">0</dd></div><div><dt>Символы</dt><dd id="indexChars">0</dd></div></dl>
-          <div class="index-strategies">
-            <article class="index-strategy"><strong>Fixed-size</strong><small>1400 символов · overlap 200</small><p id="fixedIndexStats">Ещё не индексирован</p><button class="secondary-button" data-index-strategy="fixed">Index Fixed</button></article>
-            <article class="index-strategy"><strong>Structural</strong><small>Заголовки, классы и функции</small><p id="structuralIndexStats">Ещё не индексирован</p><button class="secondary-button" data-index-strategy="structural">Index Structural</button></article>
-          </div>
-          <button id="indexBothButton" class="secondary-button" type="button">Index Both</button>
-          <div id="indexJob" class="index-job" hidden><progress id="indexProgress" max="100" value="0"></progress><span id="indexPhase">Loading files</span></div>
-          <p id="indexError" class="mcp-error" role="status" hidden></p>
-          <form id="documentSearchForm" class="document-search-form">
-            <h4>Semantic Search</h4><textarea id="documentQuery" rows="2" maxlength="4000" placeholder="Где реализована маршрутизация MCP?"></textarea>
-            <label class="field-label" for="documentStrategy">Strategy</label><select id="documentStrategy"><option value="structural">Structural</option><option value="fixed">Fixed</option></select>
-            <label class="field-label" for="documentTopK">Top K</label><input id="documentTopK" type="number" min="1" max="20" value="5">
-            <div class="index-actions"><button class="secondary-button" type="submit">Search</button><button id="compareStrategiesButton" class="secondary-button" type="button">Compare Strategies</button></div>
-          </form>
-          <div id="documentSearchResults" class="document-search-results" aria-live="polite"></div>
-        </section>
         <section class="side-card memory-panel" aria-label="Память и стоимость">
           <h3>Память и токены</h3>
           <dl class="memory-stats" aria-live="polite">

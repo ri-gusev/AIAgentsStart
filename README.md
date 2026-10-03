@@ -1,10 +1,10 @@
 # AI Agent
 
-A local C++17 web application for AI chat, project task workflows, memory, MCP tools, reminders, and semantic search over the project source and documentation.
+A local C++17 web application for AI chat, project task workflows, memory, MCP tools, reminders, and optional RAG over project sources.
 
 ## Architecture
 
-The C++ backend serves two chat modes: Tasks uses the task state machine; Assistant handles conversation and MCP tools. Chat IDs in the existing memory database isolate working memory and conversation summaries while sharing long-term facts. Document Index uses its own SQLite database and local Ollama embeddings; indexed documents are not sent to OpenAI.
+The C++ backend serves two chat modes: Tasks uses the task state machine; Assistant handles conversation and MCP tools. Chat IDs isolate working memory and summaries while sharing long-term facts. RAG retrieves text from a structural index in `document_index.db`, built locally with Ollama when missing or manually reindexed. Retrieved excerpts and metadata go to the existing LLM; embedding vectors stay local.
 
 ## Stack
 

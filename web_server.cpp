@@ -9,9 +9,11 @@
 #include "reminder_events.h"
 #include "codeforces_watcher.h"
 #include "document_indexer.h"
+#include "json_value.h"
 #include "socket_platform.h"
 
 #include <cctype>
+#include <algorithm>
 #include <atomic>
 #include <fstream>
 #include <iomanip>
@@ -268,13 +270,21 @@ std::string buildAgentStateFields(const Agent& agent) {
     for (const auto& message : agent.visibleConversation()) {
         if (!first) conversationJson += ',';
         first = false;
+        std::string sources = "[";
+        for (const auto& source : message.ragSources) {
+            if (sources.size() > 1) sources += ',';
+            sources += "{\"file\":\"" + jsonEscape(source.file) + "\",\"section\":\"" +
+                jsonEscape(source.section) + "\",\"chunk_id\":\"" + jsonEscape(source.chunkId) + "\"}";
+        }
+        sources += ']';
         conversationJson += "{\"id\":\"" + jsonEscape(message.id) +
                             "\",\"role\":\"" + jsonEscape(message.role) +
                             "\",\"content\":\"" + jsonEscape(message.content) +
                             "\",\"short_term\":" +
                             std::string(message.role == "user" ? "true" : "false") +
                             ",\"working\":" + std::string(message.workingSaved ? "true" : "false") +
-                            ",\"long_term\":" + std::string(message.longTermSaved ? "true" : "false") + "}";
+                            ",\"long_term\":" + std::string(message.longTermSaved ? "true" : "false") +
+                            ",\"rag_sources\":" + sources + "}";
     }
     conversationJson += ']';
 
@@ -682,18 +692,64 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
                 sendHttpResponse(client, 400, "application/json",
                                  "{\"error\":\"A valid chat_id is required\"," +
                                      buildAgentStateFields(agent) + "}");
-            } else if (!(chatIdPresent ? agent.handleChatMessage(chatId, prompt, answer, error)
-                                     : agent.handleChatMessage(agent.activeChatId(), prompt, answer, error))) {
-                sendHttpResponse(client, agent.inputRejected() ? 400 : 500, "application/json",
-                                 "{\"error\":\"" + jsonEscape(error) + "\"," +
-                                     buildAgentStateFields(agent) + "}");
-            }
-            else {
-                const std::string response =
-                    "{\"model\":\"" + jsonEscape(agent.modelName()) +
-                    "\",\"answer\":\"" + jsonEscape(answer) +
-                    "\"," + buildAgentStateFields(agent) + "}";
-                sendHttpResponse(client, 200, "application/json", response);
+            } else {
+                app_json::JsonValue body;
+                std::string parseError;
+                const bool parsed = app_json::JsonParser(request.body).parse(body, parseError);
+                const auto* rag = parsed ? body.member("rag") : nullptr;
+                if (!parsed || (rag && rag->type != app_json::JsonValue::Type::Boolean)) {
+                    sendHttpResponse(client, 400, "application/json", "{\"error\":\"rag must be a boolean\"}");
+                } else {
+                    const bool useRag = rag && rag->boolean;
+                    const std::string targetChatId = chatIdPresent ? chatId : agent.activeChatId();
+                    bool ready = true, success = true;
+                    std::string context;
+                    std::vector<Agent::RagSource> sources;
+                    const auto& chats = agent.chats();
+                    if (useRag && std::none_of(chats.begin(), chats.end(), [&](const auto& chat) { return chat.id == targetChatId; })) {
+                        success = false; error = "Chat not found";
+                    } else if (useRag) {
+                        if (!document_index::DocumentIndexer::validSearchRequest(prompt, 5)) {
+                            success = false; error = "RAG query is empty or too long";
+                        } else {
+                            success = documentIndexer.ensureReady(ready, error);
+                            if (success && ready) {
+                                std::vector<document_index::SearchHit> hits;
+                                success = documentIndexer.retrieve(prompt, 5, hits, error);
+                                if (success) {
+                                    context = "{\"retrieved_chunks\":[";
+                                    for (const auto& hit : hits) {
+                                        if (!sources.empty()) context += ',';
+                                        // Limit text sent to the model, keeping UTF-8 boundaries intact.
+                                        size_t end = std::min<size_t>(hit.chunk.content.size(), 6000);
+                                        while (end < hit.chunk.content.size() && end &&
+                                               (static_cast<unsigned char>(hit.chunk.content[end]) & 0xc0) == 0x80) --end;
+                                        context += "{\"file\":\"" + jsonEscape(hit.chunk.file) +
+                                            "\",\"title\":\"" + jsonEscape(hit.chunk.title) +
+                                            "\",\"section\":\"" + jsonEscape(hit.chunk.section) +
+                                            "\",\"chunk_id\":\"" + jsonEscape(hit.chunk.chunkId) +
+                                            "\",\"content\":\"" + jsonEscape(hit.chunk.content.substr(0, end)) + "\"}";
+                                        sources.push_back({hit.chunk.file, hit.chunk.section, hit.chunk.chunkId});
+                                    }
+                                    context += "]}";
+                                }
+                            }
+                        }
+                    }
+                    if (!success) {
+                        sendHttpResponse(client, 502, "application/json", "{\"rag_error\":true,\"error\":\"" + jsonEscape(error) + "\"}");
+                    } else if (!ready) {
+                        // The UI retries this same question after indexing. No turn or LLM call yet.
+                        sendHttpResponse(client, 202, "application/json", "{\"rag_indexing\":true}");
+                    } else if (!agent.handleChatMessage(targetChatId, prompt, answer, error, context, sources)) {
+                        sendHttpResponse(client, agent.inputRejected() ? 400 : 500, "application/json",
+                            "{\"error\":\"" + jsonEscape(error) + "\"," + buildAgentStateFields(agent) + "}");
+                    } else {
+                        sendHttpResponse(client, 200, "application/json",
+                            "{\"model\":\"" + jsonEscape(agent.modelName()) + "\",\"answer\":\"" +
+                            jsonEscape(answer) + "\"," + buildAgentStateFields(agent) + "}");
+                    }
+                }
             }
         } else if (request.method == "POST" &&
                    (request.path == "/api/chats" || request.path == "/api/chats/select" ||
@@ -807,30 +863,13 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
                                      jsonEscape(error) + "\"," +
                                      buildAgentStateFields(agent) + "}");
             }
-        } else if (request.method == "GET" && request.path == "/api/document-index/status") {
+        } else if (request.method == "GET" && request.path == "/api/rag/status") {
             sendHttpResponse(client, 200, "application/json", documentIndexer.statusJson());
-        } else if (request.method == "POST" && request.path == "/api/document-index/index") {
-            std::string strategy, error;
-            const bool parsed = extractJsonStringField(request.body, "strategy", strategy);
-            const bool started = parsed && documentIndexer.start(strategy, error);
-            sendHttpResponse(client, started ? 202 : 400, "application/json",
-                started ? "{\"accepted\":true}" : "{\"error\":\"" + jsonEscape(parsed ? error : "strategy is required") + "\"}");
-        } else if (request.method == "POST" && (request.path == "/api/document-index/search" || request.path == "/api/document-index/compare")) {
-            std::string query, strategy;
-            extractJsonStringField(request.body, "query", query);
-            extractJsonStringField(request.body, "strategy", strategy);
-            int topK = 5;
-            std::smatch match;
-            if (std::regex_search(request.body, match, std::regex(R"("top_k"\s*:\s*(\d+))"))) { try { topK = std::stoi(match[1].str()); } catch (...) { topK = 21; } }
-            const bool comparing = request.path == "/api/document-index/compare";
-            if (!comparing && (strategy != "fixed" && strategy != "structural")) {
-                sendHttpResponse(client, 400, "application/json", "{\"error\":\"strategy must be fixed or structural\"}");
-            } else if (!document_index::DocumentIndexer::validSearchRequest(query, comparing ? "fixed" : strategy, topK)) {
-                sendHttpResponse(client, 400, "application/json", "{\"error\":\"query or top_k is invalid\"}");
-            } else {
-                const std::string result = comparing ? documentIndexer.compareJson(query, topK) : documentIndexer.searchJson(query, strategy, topK);
-                sendHttpResponse(client, result.rfind("{\"error\":", 0) == 0 ? 502 : 200, "application/json", result);
-            }
+        } else if (request.method == "POST" && request.path == "/api/rag/reindex") {
+            std::string error;
+            const bool started = documentIndexer.start(error);
+            sendHttpResponse(client, started ? 202 : 409, "application/json",
+                started ? "{\"accepted\":true}" : "{\"error\":\"" + jsonEscape(error) + "\"}");
         } else if (request.method == "GET" && request.path == "/api/state") {
             sendHttpResponse(client, 200, "application/json",
                              "{" + buildAgentStateFields(agent) + "}");
