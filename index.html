@@ -211,12 +211,14 @@
             </div>
           </form>
         </details>
-        <details class="side-card fact-panel">
-          <summary>Рабочая память этого чата</summary>
+        <details class="side-card fact-panel" open>
+          <summary><span>Рабочая память</span><span class="memory-count" aria-label="Количество записей">0</span></summary>
+          <p class="memory-scope">Контекст только текущего чата</p>
           <div id="workingMemoryList" class="fact-list">Пока нет данных.</div>
         </details>
-        <details class="side-card fact-panel">
-          <summary>Общая долговременная память</summary>
+        <details class="side-card fact-panel" open>
+          <summary><span>Долговременная память</span><span class="memory-count" aria-label="Количество записей">0</span></summary>
+          <p class="memory-scope">Общие сведения для всех чатов</p>
           <div id="longTermMemoryList" class="fact-list">Пока нет данных.</div>
         </details>
       </aside>

@@ -9,6 +9,24 @@
 #include <stdexcept>
 
 namespace rag {
+std::string buildContext(const std::vector<document_index::SearchHit>& hits) {
+    if (hits.empty()) return {};
+    std::string context = "{\"retrieved_chunks\":[";
+    for (const auto& hit : hits) {
+        if (context.back() != '[') context += ',';
+        const auto& chunk = hit.chunk;
+        size_t end = std::min<size_t>(chunk.content.size(), 6000);
+        while (end < chunk.content.size() && end &&
+               (static_cast<unsigned char>(chunk.content[end]) & 0xc0) == 0x80) --end;
+        context += "{\"file\":\"" + app_json::jsonEscape(chunk.file) + "\",\"title\":\"" + app_json::jsonEscape(chunk.title) +
+            "\",\"section\":\"" + app_json::jsonEscape(chunk.section) + "\",\"chunk_id\":\"" + app_json::jsonEscape(chunk.chunkId) +
+            "\",\"source_type\":\"" + app_json::jsonEscape(chunk.sourceType) + "\",\"page\":" + std::to_string(chunk.page) +
+            ",\"line_start\":" + std::to_string(chunk.lineStart) + ",\"line_end\":" + std::to_string(chunk.lineEnd) +
+            ",\"relevance_score\":" + std::to_string(hit.relevanceScore) +
+            ",\"content\":\"" + app_json::jsonEscape(chunk.content.substr(0, end)) + "\"}";
+    }
+    return context + "]}";
+}
 bool Config::load(const std::string& path, Config& config, std::string& error) {
     error.clear(); config = Config{};
     std::ifstream file(path, std::ios::binary);

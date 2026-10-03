@@ -69,7 +69,8 @@ public:
     bool saveSetting(const std::string& key, const std::string& value, std::string& error);
     bool saveFacts(const std::string& chatId,
                    const std::vector<LongTermMemoryFact>& working,
-                   const std::vector<LongTermMemoryFact>& longTerm, std::string& error);
+                   const std::vector<LongTermMemoryFact>& longTerm, std::string& error,
+                   const std::vector<std::string>& removeWorkingKeys = {});
 
 private:
     sqlite3* database_ = nullptr;

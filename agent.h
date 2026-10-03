@@ -50,6 +50,7 @@ public:
         bool workingSaved = false;
         bool longTermSaved = false;
         std::vector<RagSource> ragSources;
+        bool ragEnabled = false;
     };
 
     explicit Agent(const std::string& configPath = "agent_config.local.json");
@@ -102,7 +103,7 @@ public:
     bool handleChatMessage(const std::string& chatId, const std::string& userMessage,
                            std::string& answer, std::string& error,
                            const std::string& retrievalContext = {},
-                           const std::vector<RagSource>& sources = {});
+                           const std::vector<RagSource>& sources = {}, bool ragEnabled = false);
     bool rewriteRetrievalQuery(const std::string& chatId, const std::string& originalQuestion,
                                std::string& rewrittenQuery, std::string& error);
     bool generateTaskPlan(const std::string& taskRequest, std::string& plan,
@@ -166,6 +167,7 @@ private:
     const ChatState& activeChat() const;
     void clearRequestStatus();
     std::string baseInstruction() const;
+    std::string chatModePolicy() const;
     std::string buildWorkingMemoryPrompt() const;
     std::string buildInvariantPrompt() const;
 
@@ -218,6 +220,7 @@ private:
 
     Config config_;
     std::string retrievalContext_;
+    bool retrievalEnabled_ = false;
     std::vector<RagSource> retrievalSources_;
     std::string apiKey_;
     ApiClient apiClient_;

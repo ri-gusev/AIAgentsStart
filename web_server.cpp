@@ -288,6 +288,7 @@ std::string buildAgentStateFields(const Agent& agent) {
                             std::string(message.role == "user" ? "true" : "false") +
                             ",\"working\":" + std::string(message.workingSaved ? "true" : "false") +
                             ",\"long_term\":" + std::string(message.longTermSaved ? "true" : "false") +
+                            ",\"rag_enabled\":" + std::string(message.ragEnabled ? "true" : "false") +
                             ",\"rag_sources\":" + sources + "}";
     }
     conversationJson += ']';
@@ -727,25 +728,11 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
                                     documentIndexer.retrieve(rewrittenQuery, retrieval.preFilterTopK, hits, error);
                                 if (success) hits = rag::selectCandidates(rewrittenQuery, std::move(hits), retrieval);
                                 if (success && !hits.empty()) {
-                                    context = "{\"retrieved_chunks\":[";
+                                    context = rag::buildContext(hits);
                                     for (const auto& hit : hits) {
-                                        if (!sources.empty()) context += ',';
-                                        // Limit text sent to the model, keeping UTF-8 boundaries intact.
-                                        size_t end = std::min<size_t>(hit.chunk.content.size(), 6000);
-                                        while (end < hit.chunk.content.size() && end &&
-                                               (static_cast<unsigned char>(hit.chunk.content[end]) & 0xc0) == 0x80) --end;
-                                        context += "{\"file\":\"" + jsonEscape(hit.chunk.file) +
-                                            "\",\"title\":\"" + jsonEscape(hit.chunk.title) +
-                                            "\",\"section\":\"" + jsonEscape(hit.chunk.section) +
-                                            "\",\"chunk_id\":\"" + jsonEscape(hit.chunk.chunkId) +
-                                            "\",\"source_type\":\"" + jsonEscape(hit.chunk.sourceType) + "\",\"page\":" + std::to_string(hit.chunk.page) +
-                                            ",\"line_start\":" + std::to_string(hit.chunk.lineStart) + ",\"line_end\":" + std::to_string(hit.chunk.lineEnd) +
-                                            ",\"relevance_score\":" + std::to_string(hit.relevanceScore) +
-                                            ",\"content\":\"" + jsonEscape(hit.chunk.content.substr(0, end)) + "\"}";
                                         sources.push_back({hit.chunk.file, hit.chunk.section, hit.chunk.chunkId, hit.chunk.sourceType,
                                             hit.chunk.page, hit.chunk.lineStart, hit.chunk.lineEnd, hit.relevanceScore});
                                     }
-                                    context += "]}";
                                 }
                             }
                         }
@@ -755,7 +742,7 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
                     } else if (!ready) {
                         // The UI retries this same question after indexing. No turn or LLM call yet.
                         sendHttpResponse(client, 202, "application/json", "{\"rag_indexing\":true}");
-                    } else if (!agent.handleChatMessage(targetChatId, prompt, answer, error, context, sources)) {
+                    } else if (!agent.handleChatMessage(targetChatId, prompt, answer, error, context, sources, useRag)) {
                         sendHttpResponse(client, agent.inputRejected() ? 400 : 500, "application/json",
                             "{\"error\":\"" + jsonEscape(error) + "\"," + buildAgentStateFields(agent) + "}");
                     } else {

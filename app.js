@@ -506,7 +506,7 @@ function renderConversation(messages = [], keepPosition = false) {
   } else {
     messages.forEach((item) => {
       const message = addMessage(item.role, item.content, false);
-      if (item.role === 'assistant') renderRagSources(message, item.rag_sources);
+      if (item.role === 'assistant') renderRagSources(message, item.rag_sources, item.rag_enabled);
     });
   }
   if (keepPosition) chatLog.scrollTop = previousTop;
@@ -515,19 +515,62 @@ function renderConversation(messages = [], keepPosition = false) {
 
 function renderFacts(container, facts) {
   container.replaceChildren();
-  if (!Array.isArray(facts) || !facts.length) {
-    container.textContent = 'Пока нет данных.';
+  const labels = {
+    'task.goal': 'Цель', 'task.constraints': 'Ограничения',
+    'task.clarifications': 'Уточнения и решения', 'task.terms': 'Термины',
+    'task.open_questions': 'Открытые вопросы', 'task.stack': 'Стек проекта',
+    'user.name': 'Имя', 'user.language': 'Язык общения',
+    'user.preference': 'Предпочтения', 'user.preferences': 'Предпочтения',
+    'user.role': 'Роль', 'user.location': 'Местоположение',
+  };
+  const categoryOrder = ['task.goal', 'task.constraints', 'task.clarifications', 'task.terms', 'task.open_questions'];
+  const entries = Array.isArray(facts) ? facts.filter((fact) => fact && typeof fact.key === 'string' && typeof fact.value === 'string') : [];
+  const count = container.closest('.fact-panel')?.querySelector('.memory-count');
+  if (count) count.textContent = String(entries.length);
+  if (!entries.length) {
+    const empty = document.createElement('p');
+    empty.className = 'memory-empty';
+    empty.textContent = container === workingMemoryList
+      ? 'Здесь появятся цель, ограничения и важные решения этого чата.'
+      : 'Здесь появятся сохранённые сведения и постоянные предпочтения пользователя.';
+    container.append(empty);
     return;
   }
-  facts.forEach((fact) => {
-    const item = document.createElement('div');
+  entries.sort((a, b) => {
+    const rank = (key) => { const index = categoryOrder.indexOf(key); return index < 0 ? categoryOrder.length : index; };
+    return rank(a.key) - rank(b.key);
+  });
+  entries.forEach((fact) => {
+    const item = document.createElement('section');
     item.className = 'fact-item';
+    if (fact.key === 'task.goal') item.classList.add('memory-goal');
     const key = document.createElement('strong');
     key.className = 'fact-key';
-    key.textContent = typeof fact.key === 'string' ? fact.key : '';
-    const value = document.createElement('span');
-    value.textContent = typeof fact.value === 'string' ? fact.value : '';
-    item.append(key, value);
+    const readable = fact.key.replace(/^(task|user)\./, '').replace(/[._-]+/g, ' ');
+    key.textContent = labels[fact.key] || readable.charAt(0).toUpperCase() + readable.slice(1);
+    key.title = fact.key;
+    item.append(key);
+    let values;
+    try {
+      const parsed = JSON.parse(fact.value);
+      if (Array.isArray(parsed) && parsed.every((entry) => typeof entry === 'string')) values = parsed;
+    } catch (_) { /* Plain-text facts retain their original content. */ }
+    if (values && values.length) {
+      const terms = fact.key === 'task.terms';
+      const list = document.createElement(terms ? 'div' : 'ul');
+      list.className = terms ? 'memory-terms' : 'memory-values';
+      values.forEach((text) => {
+        const entry = document.createElement(terms ? 'span' : 'li');
+        entry.textContent = text;
+        list.append(entry);
+      });
+      item.append(list);
+    } else {
+      const value = document.createElement('p');
+      value.className = 'fact-value';
+      value.textContent = values ? 'Нет активных записей.' : fact.value;
+      item.append(value);
+    }
     container.append(item);
   });
 }
@@ -998,12 +1041,20 @@ setInterval(() => { if (!document.hidden) refreshMcpServers(); }, 15000);
 // returns the complete current Agent state.
 
 // Retrieval stays in the existing chat flow. Only source metadata reaches this UI.
-function renderRagSources(message, sources) {
-  if (!Array.isArray(sources) || !sources.length) return;
+function renderRagSources(message, sources, ragEnabled = false) {
+  if (!Array.isArray(sources)) sources = [];
+  if (!ragEnabled && !sources.length) return;
+  if (!sources.length) {
+    const empty = document.createElement('div');
+    empty.className = 'rag-sources';
+    empty.textContent = 'Sources: релевантные источники не найдены.';
+    message.append(empty);
+    return;
+  }
   const details = document.createElement('details');
   details.className = 'rag-sources';
   const summary = document.createElement('summary');
-  summary.textContent = 'Источники RAG';
+  summary.textContent = 'Sources';
   const list = document.createElement('ul');
   const seen = new Set();
   sources.forEach((source) => {

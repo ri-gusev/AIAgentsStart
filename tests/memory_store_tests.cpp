@@ -174,11 +174,29 @@ void testTransitionRollbackAndDeleteCleanup() {
 }
 }
 
+void testWorkingDeltaTransaction() {
+    TempDatabase temp; MemoryStore store(temp.path.string()); std::string chat, other, error;
+    require(store.createChat("Working", "assistant", chat, error) && store.createChat("Other", "assistant", other, error), error);
+    require(store.saveFacts(chat, {{"task.goal", "old goal"}, {"task.stack", "SQLite"}}, {{"user.preference", "concise"}}, error), error);
+    require(store.upsertWorking(other, {"task.stack", "other stack"}, error), error);
+    sqlite3* db = nullptr; require(sqlite3_open(temp.path.string().c_str(), &db) == SQLITE_OK, "Open rollback test");
+    executeSql(db, "CREATE TRIGGER reject_goal BEFORE INSERT ON working_memory WHEN NEW.memory_key='task.goal' BEGIN SELECT RAISE(ABORT,'reject goal'); END;");
+    require(!store.saveFacts(chat, {{"task.goal", "new goal"}}, {}, error, {"task.stack"}), "Reject snapshot write");
+    std::vector<LongTermMemoryFact> facts;
+    require(store.loadWorking(chat, facts, error) && facts.size() == 2, "Delete and update roll back together");
+    executeSql(db, "DROP TRIGGER reject_goal;"); sqlite3_close(db);
+    require(store.saveFacts(chat, {{"task.goal", "new goal"}}, {}, error, {"task.stack"}), error);
+    require(store.loadWorking(chat, facts, error) && facts.size() == 1 && facts[0].value == "new goal", "Superseded working record removed");
+    require(store.loadWorking(other, facts, error) && facts.size() == 1 && facts[0].value == "other stack", "Other chat unaffected");
+    require(store.loadAll(facts, error) && facts.size() == 1 && facts[0].value == "concise", "Global memory unaffected");
+}
+
 int main() {
     try {
         testTransitionsPauseResumeAndLog();
         testLegacyMigration();
         testTransitionRollbackAndDeleteCleanup();
+        testWorkingDeltaTransaction();
         std::cout << "memory_store_tests: passed\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& exception) {

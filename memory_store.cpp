@@ -930,12 +930,22 @@ bool MemoryStore::saveSetting(const std::string& key, const std::string& value, 
 
 bool MemoryStore::saveFacts(const std::string& chatId,
                             const std::vector<LongTermMemoryFact>& working,
-                            const std::vector<LongTermMemoryFact>& longTerm, std::string& error) {
+                            const std::vector<LongTermMemoryFact>& longTerm, std::string& error,
+                            const std::vector<std::string>& removeWorkingKeys) {
     error.clear();
     if (!isReady()) { error = initializationError_; return false; }
     if (!execute(database_, "BEGIN IMMEDIATE;", error)) return false;
     bool success = true;
+    for (const auto& key : removeWorkingKeys) {
+        Statement statement(nullptr, sqlite3_finalize);
+        if (!prepare(database_, "DELETE FROM working_memory WHERE chat_id=?1 AND memory_key=?2;", statement, error) ||
+            !bindChatId(database_, statement.get(), 1, chatId, error) ||
+            !bindText(database_, statement.get(), 2, key, error) || !stepDone(database_, statement.get(), error)) {
+            success = false; break;
+        }
+    }
     for (const auto& fact : working) {
+        if (!success) break;
         if (!upsertWorking(chatId, fact, error)) { success = false; break; }
     }
     if (success) {

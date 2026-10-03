@@ -11,4 +11,6 @@ struct Config {
 // A bounded lexical bonus refines semantic ranking; filtering uses cosine only.
 std::vector<document_index::SearchHit> selectCandidates(const std::string& rewrittenQuery,
     std::vector<document_index::SearchHit> candidates, const Config& config);
+// Text + source metadata only. Embeddings never enter the model context.
+std::string buildContext(const std::vector<document_index::SearchHit>& hits);
 }
