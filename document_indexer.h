@@ -11,7 +11,7 @@ namespace document_index {
 struct Document { std::string source, relativePath, title, type, content; int page=0; };
 struct Chunk { std::string source, file, title, section, chunkId, strategy, content, hash; std::vector<float> embedding; std::string sourceType="project", uploadId; int page=0, lineStart=0, lineEnd=0; };
 struct CorpusStats { int fileCount=0, totalLines=0; long long totalCharacters=0; };
-struct SearchHit { double score=0; Chunk chunk; };
+struct SearchHit { double score=0; Chunk chunk; double relevanceScore=0; };
 
 class DocumentIndexer {
 public:

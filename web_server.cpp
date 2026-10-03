@@ -9,6 +9,7 @@
 #include "reminder_events.h"
 #include "codeforces_watcher.h"
 #include "document_indexer.h"
+#include "rag_retrieval.h"
 #include "json_value.h"
 #include "socket_platform.h"
 
@@ -276,7 +277,8 @@ std::string buildAgentStateFields(const Agent& agent) {
             sources += "{\"file\":\"" + jsonEscape(source.file) + "\",\"section\":\"" + jsonEscape(source.section) +
                 "\",\"chunk_id\":\"" + jsonEscape(source.chunkId) + "\",\"source_type\":\"" + jsonEscape(source.sourceType) +
                 "\",\"page\":" + std::to_string(source.page) + ",\"line_start\":" + std::to_string(source.lineStart) +
-                ",\"line_end\":" + std::to_string(source.lineEnd) + "}";
+                ",\"line_end\":" + std::to_string(source.lineEnd) +
+                ",\"relevance_score\":" + std::to_string(source.relevanceScore) + "}";
         }
         sources += ']';
         conversationJson += "{\"id\":\"" + jsonEscape(message.id) +
@@ -711,14 +713,20 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
                     if (useRag && std::none_of(chats.begin(), chats.end(), [&](const auto& chat) { return chat.id == targetChatId; })) {
                         success = false; error = "Chat not found";
                     } else if (useRag) {
-                        if (!document_index::DocumentIndexer::validSearchRequest(prompt, 5)) {
+                        rag::Config retrieval;
+                        if (!rag::Config::load("rag_config.json", retrieval, error)) {
+                            success = false;
+                        } else if (!document_index::DocumentIndexer::validSearchRequest(prompt, retrieval.preFilterTopK)) {
                             success = false; error = "RAG query is empty or too long";
                         } else {
                             success = documentIndexer.ensureReady(ready, error);
                             if (success && ready) {
                                 std::vector<document_index::SearchHit> hits;
-                                success = documentIndexer.retrieve(prompt, 5, hits, error);
-                                if (success) {
+                                std::string rewrittenQuery;
+                                success = agent.rewriteRetrievalQuery(targetChatId, prompt, rewrittenQuery, error) &&
+                                    documentIndexer.retrieve(rewrittenQuery, retrieval.preFilterTopK, hits, error);
+                                if (success) hits = rag::selectCandidates(rewrittenQuery, std::move(hits), retrieval);
+                                if (success && !hits.empty()) {
                                     context = "{\"retrieved_chunks\":[";
                                     for (const auto& hit : hits) {
                                         if (!sources.empty()) context += ',';
@@ -732,9 +740,10 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
                                             "\",\"chunk_id\":\"" + jsonEscape(hit.chunk.chunkId) +
                                             "\",\"source_type\":\"" + jsonEscape(hit.chunk.sourceType) + "\",\"page\":" + std::to_string(hit.chunk.page) +
                                             ",\"line_start\":" + std::to_string(hit.chunk.lineStart) + ",\"line_end\":" + std::to_string(hit.chunk.lineEnd) +
+                                            ",\"relevance_score\":" + std::to_string(hit.relevanceScore) +
                                             ",\"content\":\"" + jsonEscape(hit.chunk.content.substr(0, end)) + "\"}";
                                         sources.push_back({hit.chunk.file, hit.chunk.section, hit.chunk.chunkId, hit.chunk.sourceType,
-                                            hit.chunk.page, hit.chunk.lineStart, hit.chunk.lineEnd});
+                                            hit.chunk.page, hit.chunk.lineStart, hit.chunk.lineEnd, hit.relevanceScore});
                                     }
                                     context += "]}";
                                 }
@@ -752,7 +761,8 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
                     } else {
                         sendHttpResponse(client, 200, "application/json",
                             "{\"model\":\"" + jsonEscape(agent.modelName()) + "\",\"answer\":\"" +
-                            jsonEscape(answer) + "\"," + buildAgentStateFields(agent) + "}");
+                            jsonEscape(answer) + "\",\"rag_no_sources\":" + (useRag && sources.empty() ? "true" : "false") +
+                            "," + buildAgentStateFields(agent) + "}");
                     }
                 }
             }

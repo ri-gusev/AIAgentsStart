@@ -40,6 +40,7 @@ public:
         std::string chunkId;
         std::string sourceType;
         int page=0, lineStart=0, lineEnd=0;
+        double relevanceScore=0;
     };
 
     struct ChatMessage {
@@ -102,6 +103,8 @@ public:
                            std::string& answer, std::string& error,
                            const std::string& retrievalContext = {},
                            const std::vector<RagSource>& sources = {});
+    bool rewriteRetrievalQuery(const std::string& chatId, const std::string& originalQuestion,
+                               std::string& rewrittenQuery, std::string& error);
     bool generateTaskPlan(const std::string& taskRequest, std::string& plan,
                           std::string& error);
     bool performTaskAction(const std::string& action, std::string& error);

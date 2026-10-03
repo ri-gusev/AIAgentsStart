@@ -778,6 +778,7 @@ async function askAgent(question) {
       return;
     }
     if (!renderAgentState(data)) throw new Error('State response missing');
+    if (data.rag_no_sources) showRagStatus('Релевантных источников не найдено. Ответ без RAG-контекста.');
   } catch (error) {
     pendingMessage.remove();
     addMessage('error', error.ragError ? 'RAG: ' + error.message
@@ -1008,7 +1009,8 @@ function renderRagSources(message, sources) {
   sources.forEach((source) => {
     const location = source.page > 0 ? ' · стр. ' + source.page
       : source.line_start > 0 ? ' · строки ' + source.line_start + '–' + source.line_end : '';
-    const label = String(source.file || '') + ' — ' + String(source.section || 'Общий раздел') + location;
+    const score = Number.isFinite(source.relevance_score) ? ' · relevance ' + source.relevance_score.toFixed(3) : '';
+    const label = String(source.file || '') + ' — ' + String(source.section || 'Общий раздел') + location + score;
     if (seen.has(label)) return;
     seen.add(label);
     const item = document.createElement('li');

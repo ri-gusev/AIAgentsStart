@@ -1,0 +1,5 @@
+{
+  "pre_filter_top_k": 10,
+  "post_filter_top_k": 4,
+  "similarity_threshold": 0.45
+}
