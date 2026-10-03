@@ -49,7 +49,8 @@ constexpr const char* kCreateTableSql =
     ");"
     "CREATE TABLE IF NOT EXISTS chats ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-    "name TEXT NOT NULL"
+    "name TEXT NOT NULL,"
+    "mode TEXT NOT NULL DEFAULT 'task' CHECK(mode IN ('task','assistant'))"
     ");"
     "CREATE TABLE IF NOT EXISTS working_memory ("
     "chat_id INTEGER NOT NULL REFERENCES chats(id),"
@@ -388,6 +389,18 @@ MemoryStore::MemoryStore(const std::string& databasePath) {
         !ensureTransitionLogSchema(database_, initializationError_)) {
         return;
     }
+    // Existing chats retain their project plans and identifiers after migration.
+    Statement columns(nullptr, sqlite3_finalize);
+    if (!prepare(database_, "PRAGMA table_info(chats);", columns, initializationError_)) return;
+    bool hasMode = false;
+    int result;
+    while ((result = sqlite3_step(columns.get())) == SQLITE_ROW)
+        if (columnText(columns.get(), 1) == "mode") hasMode = true;
+    if (result != SQLITE_DONE) { initializationError_ = sqlite3_errmsg(database_); return; }
+    columns.reset();
+    if (!hasMode) execute(database_,
+        "ALTER TABLE chats ADD COLUMN mode TEXT NOT NULL DEFAULT 'task' "
+        "CHECK(mode IN ('task','assistant'));", initializationError_);
 }
 
 MemoryStore::~MemoryStore() {
@@ -441,11 +454,11 @@ bool MemoryStore::loadChats(std::vector<StoredChat>& chats, std::string& error) 
     error.clear();
     if (!isReady()) { error = initializationError_; return false; }
     Statement statement(nullptr, sqlite3_finalize);
-    if (!prepare(database_, "SELECT id, name FROM chats ORDER BY id;", statement, error)) return false;
+    if (!prepare(database_, "SELECT id, name, mode FROM chats ORDER BY id;", statement, error)) return false;
     int result;
     while ((result = sqlite3_step(statement.get())) == SQLITE_ROW) {
         chats.push_back({std::to_string(sqlite3_column_int64(statement.get(), 0)),
-                         columnText(statement.get(), 1)});
+                         columnText(statement.get(), 1), columnText(statement.get(), 2)});
     }
     if (result != SQLITE_DONE) {
         chats.clear();
@@ -456,16 +469,23 @@ bool MemoryStore::loadChats(std::vector<StoredChat>& chats, std::string& error) 
 }
 
 bool MemoryStore::createChat(const std::string& name, std::string& id, std::string& error) {
+    return createChat(name, "task", id, error);
+}
+
+bool MemoryStore::createChat(const std::string& name, const std::string& mode,
+                             std::string& id, std::string& error) {
     id.clear();
     error.clear();
     if (!isReady()) { error = initializationError_; return false; }
     if (name.empty()) { error = "Chat name must not be empty"; return false; }
+    if (mode != "task" && mode != "assistant") { error = "Invalid chat mode"; return false; }
     if (!execute(database_, "BEGIN IMMEDIATE;", error)) return false;
     bool success = true;
     {
         Statement statement(nullptr, sqlite3_finalize);
-        success = prepare(database_, "INSERT INTO chats(name) VALUES(?1);", statement, error) &&
+        success = prepare(database_, "INSERT INTO chats(name,mode) VALUES(?1,?2);", statement, error) &&
                   bindText(database_, statement.get(), 1, name, error) &&
+                  bindText(database_, statement.get(), 2, mode, error) &&
                   stepDone(database_, statement.get(), error);
         if (success) id = std::to_string(sqlite3_last_insert_rowid(database_));
     }
@@ -483,7 +503,7 @@ bool MemoryStore::createChat(const std::string& name, std::string& id, std::stri
                   bindChatId(database_, statement.get(), 1, id, error) &&
                   stepDone(database_, statement.get(), error);
     }
-    if (success) {
+    if (success && mode == "task") {
         success = insertTransitionLog(database_, id, {}, "CREATE_TASK", "PLANNING", error);
     }
     if (success && execute(database_, "COMMIT;", error)) return true;

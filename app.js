@@ -5,6 +5,9 @@ const chatLog = document.querySelector('#chatLog');
 const memoryDescription = document.querySelector('#memoryDescription');
 const chatNotice = document.querySelector('#chatNotice');
 const chatSelect = document.querySelector('#chatSelect');
+const chatModeButtons = document.querySelectorAll('[data-chat-mode]');
+const chatModeDescription = document.querySelector('#chatModeDescription');
+const mcpPanel = document.querySelector('.mcp-panel');
 const newChatForm = document.querySelector('#newChatForm');
 const chatNameInput = document.querySelector('#chatNameInput');
 const createChatButton = document.querySelector('#createChatButton');
@@ -66,6 +69,8 @@ const TASK_TRANSITION_ENDPOINT = '/api/task/transition';
 
 let requestPending = false;
 let activeChatId = '';
+let activeChatMode = 'task';
+let availableChats = [];
 let personalizationDirty = false;
 let serverPersonalization = '';
 let pendingDeleteChatId = '';
@@ -262,6 +267,7 @@ async function runMcpTool(name, args, button) {
 }
 
 async function requestMcp(path, method = 'GET') {
+  if (activeChatMode !== 'assistant') return;
   if (mcpPending) return;
   mcpPending = true;
   updateMcpControls();
@@ -349,10 +355,11 @@ function openDeleteConfirmation() {
 
 function updateControlState() {
   const busy = requestPending;
-  const taskLocked = currentTask.state === 'PAUSED' || currentTask.state === 'DONE';
+  const taskLocked = activeChatMode === 'task' && (currentTask.state === 'PAUSED' || currentTask.state === 'DONE');
   sendButton.disabled = busy || !activeChatId || taskLocked;
   input.disabled = busy || taskLocked;
   chatSelect.disabled = busy;
+  chatModeButtons.forEach((button) => { button.disabled = busy; });
   chatNameInput.disabled = busy;
   createChatButton.disabled = busy;
   deleteChatButton.disabled = busy || !activeChatId;
@@ -423,6 +430,7 @@ function taskAction(label, action, errorText, { variant = '', requiresPlan = fal
 
 function renderTaskActions() {
   taskStateActions.replaceChildren();
+  if (activeChatMode !== 'task') return;
   if (currentTask.state === 'PLANNING') {
     taskStateActions.append(
       taskAction('Approve Plan / Начать выполнение', 'APPROVE_PLAN',
@@ -468,12 +476,14 @@ function renderConversation(messages = [], keepPosition = false) {
   const previousTop = chatLog.scrollTop;
   chatLog.replaceChildren();
   if (!Array.isArray(messages) || !messages.length) {
-    if (currentTask.plan) {
+    if (activeChatMode === 'task' && currentTask.plan) {
       addMessage('assistant', currentTask.plan, false);
     } else {
       const empty = document.createElement('div');
       empty.className = 'chat-empty';
-      empty.textContent = 'Опишите задачу. Первое сообщение станет этапом PLANNING.';
+      empty.textContent = activeChatMode === 'task'
+        ? 'Опишите задачу. Первое сообщение станет этапом PLANNING.'
+        : 'Задайте вопрос или попросите выполнить действие через MCP.';
       chatLog.append(empty);
     }
   } else {
@@ -580,11 +590,22 @@ function renderTaskState(data) {
 function renderAgentState(data, { renderChat = true, keepPosition = false, forcePersonalization = false } = {}) {
   if (!data || !data.memory) return false;
   const previousActiveChatId = activeChatId;
+  const previousChatMode = activeChatMode;
   activeChatId = String(data.active_chat_id || '');
+  activeChatMode = data.active_chat_mode === 'assistant' ? 'assistant' : 'task';
+  availableChats = Array.isArray(data.chats) ? data.chats : [];
+  chatModeButtons.forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.chatMode === activeChatMode));
+  });
+  chatModeDescription.textContent = activeChatMode === 'task'
+    ? 'Планирование → выполнение → проверка. MCP в этом чате недоступен.'
+    : 'Обычный диалог и инструменты MCP. Без task state machine.';
+  taskStatePanel.hidden = activeChatMode !== 'task';
+  mcpPanel.hidden = activeChatMode !== 'assistant';
   if (previousActiveChatId && previousActiveChatId !== activeChatId) resetInvariantForm();
   activeChatName.textContent = String(data.active_chat_name || 'Чат');
   chatSelect.replaceChildren();
-  if (Array.isArray(data.chats)) data.chats.forEach((chat) => {
+  availableChats.filter((chat) => (chat.mode || 'task') === activeChatMode).forEach((chat) => {
     const option = document.createElement('option');
     option.value = String(chat.id);
     option.textContent = String(chat.name);
@@ -597,6 +618,7 @@ function renderAgentState(data, { renderChat = true, keepPosition = false, force
   }
   serverPersonalization = typeof data.personalization === 'string' ? data.personalization : '';
   renderTaskState(data);
+  if (activeChatMode === 'assistant') input.placeholder = 'Задайте вопрос или попросите выполнить действие через MCP…';
   if (!personalizationDirty || forcePersonalization) {
     personalizationInput.value = serverPersonalization;
     personalizationDirty = false;
@@ -622,6 +644,7 @@ function renderAgentState(data, { renderChat = true, keepPosition = false, force
   if (renderChat) renderConversation(data.conversation, keepPosition);
   renderNotice(data);
   updateControlState();
+  if (activeChatMode === 'assistant' && previousChatMode !== 'assistant') requestMcp('/api/mcp/tools');
   return true;
 }
 
@@ -758,12 +781,22 @@ newChatForm.addEventListener('submit', async (event) => {
   closeDeleteConfirmation();
   // Clear immediately so rejected names never remain as a visible draft.
   chatNameInput.value = '';
-  if (await mutateState('/api/chats', { name }, 'Не удалось создать чат.', { keepPosition: false })) {
+  if (await mutateState('/api/chats', { name, mode: activeChatMode }, 'Не удалось создать чат.', { keepPosition: false })) {
     input.value = '';
     input.style.height = 'auto';
     input.focus();
   }
 });
+chatModeButtons.forEach((button) => button.addEventListener('click', async () => {
+  const mode = button.dataset.chatMode;
+  if (requestPending || mode === activeChatMode) return;
+  closeDeleteConfirmation();
+  const chat = availableChats.find((item) => item.mode === mode);
+  const accepted = chat
+    ? await mutateState('/api/chats/select', { chat_id: String(chat.id) }, 'Не удалось переключить чат.', { keepPosition: false })
+    : await mutateState('/api/chats', { name: mode === 'task' ? 'Задачи' : 'Ассистент / MCP', mode }, 'Не удалось создать чат.', { keepPosition: false });
+  if (accepted) { input.value = ''; input.style.height = 'auto'; input.focus(); }
+}));
 chatSelect.addEventListener('change', async () => {
   const selectedChatId = chatSelect.value;
   if (requestPending || !selectedChatId || selectedChatId === activeChatId) return;
@@ -835,7 +868,6 @@ mcpDisconnectButton.addEventListener('click', () => requestMcp('/api/mcp/disconn
 mcpRefreshButton.addEventListener('click', () => requestMcp('/api/mcp/tools'));
 
 loadAgentState();
-requestMcp('/api/mcp/tools');
 
 let mcpServersLoading = false;
 let mcpServerActionPending = false;
@@ -935,3 +967,88 @@ setInterval(() => { if (!document.hidden) refreshMcpServers(); }, 15000);
 // Do not refresh on window focus: the refresh marks the UI busy and can swallow
 // the first click on actions such as project deletion. Every mutation already
 // returns the complete current Agent state.
+
+// Local document index: browser talks only to the C++ backend.
+const indexStatus = document.querySelector('#ollamaStatus');
+const indexError = document.querySelector('#indexError');
+const indexJob = document.querySelector('#indexJob');
+const indexResults = document.querySelector('#documentSearchResults');
+let indexBusy = false;
+function indexErrorMessage(message) { indexError.textContent = message; indexError.hidden = !message; }
+function renderIndexStats(strategy, stats) {
+  const element = document.querySelector(strategy === 'fixed' ? '#fixedIndexStats' : '#structuralIndexStats');
+  element.textContent = !stats ? 'Ещё не индексирован' : `${stats.chunk_count} chunks · средний размер ${stats.avg_chunk_chars} · ${stats.elapsed_ms} ms · dim ${stats.embedding_dim}`;
+}
+async function refreshDocumentIndex() {
+  try {
+    const response = await fetch('/api/document-index/status', { cache: 'no-store' });
+    const data = await response.json();
+    indexStatus.textContent = data.ollama.online ? '● Online' : '● Offline';
+    indexStatus.dataset.online = String(data.ollama.online);
+    document.querySelector('#indexModel').textContent = `${data.model} · ${data.database}`;
+    document.querySelector('#indexFiles').textContent = String(data.corpus.file_count);
+    document.querySelector('#indexLines').textContent = Number(data.corpus.total_lines).toLocaleString();
+    document.querySelector('#indexChars').textContent = Number(data.corpus.total_characters).toLocaleString();
+    renderIndexStats('fixed', data.fixed); renderIndexStats('structural', data.structural);
+    indexBusy = !!data.job.running;
+    indexJob.hidden = !indexBusy && !data.job.error;
+    const percent = data.job.total ? Math.round(100 * data.job.progress / data.job.total) : 0;
+    document.querySelector('#indexProgress').value = percent;
+    document.querySelector('#indexPhase').textContent = data.job.running
+      ? `${data.job.phase}${data.job.total ? ` ${data.job.progress}/${data.job.total}` : ''}` : data.job.phase;
+    document.querySelectorAll('[data-index-strategy], #indexBothButton').forEach((button) => { button.disabled = indexBusy || !data.ollama.online; });
+    if (data.job.error) indexErrorMessage(`${data.job.error}${data.ollama.online ? '' : ' — проверьте локальный Ollama.'}`);
+    else if (!data.ollama.online) indexErrorMessage('Ollama недоступна. Проверьте локальный сервис и модель bge-m3.');
+    else if (indexError.textContent.startsWith('Ollama недоступна.')) indexErrorMessage('');
+  } catch { indexStatus.textContent = 'Статус недоступен'; }
+}
+async function startDocumentIndex(strategy) {
+  indexErrorMessage('');
+  try {
+    const response = await fetch('/api/document-index/index', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ strategy }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Не удалось запустить индексацию');
+    await refreshDocumentIndex();
+  } catch (error) { indexErrorMessage(error.message); }
+}
+document.querySelectorAll('[data-index-strategy]').forEach((button) => button.addEventListener('click', () => startDocumentIndex(button.dataset.indexStrategy)));
+document.querySelector('#indexBothButton').addEventListener('click', () => startDocumentIndex('both'));
+function appendDocumentResult(parent, result, index) {
+  const details = document.createElement('details'); details.className = 'document-result';
+  const summary = document.createElement('summary'); summary.textContent = `${index + 1}. ${Number(result.score).toFixed(3)} · ${result.file}${result.section ? ` · ${result.section}` : ''}`;
+  const preview = document.createElement('p'); preview.textContent = result.content.slice(0, 240);
+  const content = document.createElement('p'); content.textContent = result.content;
+  const meta = document.createElement('small'); meta.textContent = `source: ${result.source} · file: ${result.file} · section: ${result.section || '—'} · chunk_id: ${result.chunk_id} · strategy: ${result.strategy} · similarity: ${Number(result.score).toFixed(4)}`;
+  details.append(summary, preview, content, meta); parent.append(details);
+}
+function renderDocumentResults(data, compare) {
+  indexResults.replaceChildren();
+  if (compare) {
+    const columns = document.createElement('div'); columns.className = 'document-compare';
+    for (const strategy of ['fixed', 'structural']) {
+      const section = document.createElement('section'); const heading = document.createElement('strong'); heading.textContent = strategy.toUpperCase(); section.append(heading);
+      const stats = data[strategy].stats;
+      const summary = document.createElement('p'); summary.textContent = stats ? `${stats.chunk_count} chunks · avg ${stats.avg_chunk_chars} chars · ${stats.elapsed_ms} ms · dim ${stats.embedding_dim}` : 'Индекс ещё не создан'; section.append(summary);
+      data[strategy].results.forEach((result, i) => appendDocumentResult(section, result, i)); columns.append(section);
+    }
+    indexResults.append(columns);
+  } else data.results.forEach((result, i) => appendDocumentResult(indexResults, result, i));
+}
+async function searchDocumentIndex(compare) {
+  const query = document.querySelector('#documentQuery').value.trim();
+  if (!query) { indexErrorMessage('Введите поисковый запрос.'); return; }
+  indexErrorMessage(''); indexResults.textContent = 'Ищем…';
+  try {
+    const endpoint = compare ? '/api/document-index/compare' : '/api/document-index/search';
+    const payload = { query, top_k: Number(document.querySelector('#documentTopK').value) || 5 };
+    if (!compare) payload.strategy = document.querySelector('#documentStrategy').value;
+    const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await response.json();
+    if (!response.ok && !(compare && data.fixed && data.structural)) throw new Error(data.error || 'Поиск завершился ошибкой');
+    renderDocumentResults(data, compare);
+  } catch (error) { indexResults.replaceChildren(); indexErrorMessage(error.message); }
+}
+document.querySelector('#documentSearchForm').addEventListener('submit', (event) => { event.preventDefault(); searchDocumentIndex(false); });
+document.querySelector('#compareStrategiesButton').addEventListener('click', () => searchDocumentIndex(true));
+refreshDocumentIndex();
+setInterval(() => { if (!document.hidden) refreshDocumentIndex(); }, 1500);

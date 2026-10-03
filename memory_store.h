@@ -13,6 +13,7 @@ struct LongTermMemoryFact {
 struct StoredChat {
     std::string id;
     std::string name;
+    std::string mode = "task";
 };
 
 struct ProjectTaskState {
@@ -45,6 +46,8 @@ public:
     bool upsert(const LongTermMemoryFact& fact, std::string& error);
     bool loadChats(std::vector<StoredChat>& chats, std::string& error) const;
     bool createChat(const std::string& name, std::string& id, std::string& error);
+    bool createChat(const std::string& name, const std::string& mode,
+                    std::string& id, std::string& error);
     bool ensureProjectData(const std::string& chatId, std::string& error);
     bool deleteChat(const std::string& chatId, std::string& replacementId,
                     std::string& error);

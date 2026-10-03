@@ -8,6 +8,7 @@
 #include "reminder_scheduler.h"
 #include "reminder_events.h"
 #include "codeforces_watcher.h"
+#include "document_indexer.h"
 #include "socket_platform.h"
 
 #include <cctype>
@@ -18,6 +19,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <regex>
 #include <sstream>
 #include <string>
 
@@ -256,7 +258,8 @@ std::string buildAgentStateFields(const Agent& agent) {
         if (!first) chatsJson += ',';
         first = false;
         chatsJson += "{\"id\":\"" + jsonEscape(chat.id) +
-                     "\",\"name\":\"" + jsonEscape(chat.name) + "\"}";
+                     "\",\"name\":\"" + jsonEscape(chat.name) +
+                     "\",\"mode\":\"" + jsonEscape(chat.mode) + "\"}";
     }
     chatsJson += ']';
 
@@ -282,6 +285,7 @@ std::string buildAgentStateFields(const Agent& agent) {
         ",\"chats\":" + chatsJson +
         ",\"active_chat_id\":\"" + jsonEscape(agent.activeChatId()) + "\"" +
         ",\"active_chat_name\":\"" + jsonEscape(agent.activeChatName()) + "\"" +
+        ",\"active_chat_mode\":\"" + jsonEscape(agent.activeChatMode()) + "\"" +
         ",\"personalization\":\"" + jsonEscape(agent.personalization()) + "\"" +
         ",\"task_state\":{\"state\":\"" + jsonEscape(agent.taskState().state) +
         "\",\"resume_state\":\"" + jsonEscape(agent.taskState().resumeState) +
@@ -504,6 +508,7 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
     }
     ServerSignals signals;
     if (!signals.ready()) { net::closeSocket(server); return 1; }
+    document_index::DocumentIndexer documentIndexer;
     ReminderStore reminderStore;
     ReminderPipeline reminderPipeline(mcpClient);
     ReminderEvents reminderEvents;
@@ -524,13 +529,17 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
     if (manager) {
         codeforcesWatcher = std::make_unique<CodeforcesContestWatcher>(*manager,
             [&](const std::string& event) { reminderEvents.broadcast(event); });
-        codeforcesWatcher->start();
     }
     std::cout << "Listening on http://" << bindAddress << ":8080\n"
               << "Open http://127.0.0.1:8080 locally, or http://<server-ip>:8080 on Linux\n"
               << "Press Ctrl+C to stop the server\n";
     int exitCode = 0;
     while (!stopRequested()) {
+        // Background MCP synchronization obeys the same chat boundary.
+        if (codeforcesWatcher) {
+            if (agent.activeChatMode() == "assistant") codeforcesWatcher->start();
+            else codeforcesWatcher->stop();
+        }
         const int ready = net::waitReadable(server, 250);
         if (ready == 0) continue;
         if (ready < 0) {
@@ -548,6 +557,12 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
         HttpRequest request;
         if (!readHttpRequest(client, request)) {
             sendHttpResponse(client, 400, "application/json", "{\"error\":\"Invalid request\"}");
+        } else if (agent.activeChatMode() != "assistant" &&
+                   ((request.path.rfind("/api/mcp/", 0) == 0 && request.path != "/api/mcp/servers") ||
+                    (request.method == "POST" && request.path == "/api/reminders") ||
+                    request.path == "/api/reminders/overview")) {
+            sendHttpResponse(client, 403, "application/json",
+                "{\"error\":\"MCP is only available in the Assistant chat\"}");
         } else if (request.method == "GET" && request.path == "/api/reminders/events") {
             const auto lower = [](std::string value) {
                 for (char& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -694,10 +709,12 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
             std::string error;
             bool success = false;
             if (request.path == "/api/chats") {
-                std::string name;
-                if (!extractJsonStringField(request.body, "name", name) || name.empty()) {
-                    error = "Chat name is required";
-                } else success = agent.createChat(name, error);
+                std::string name, mode;
+                if (!extractJsonStringField(request.body, "name", name) || name.empty() ||
+                    !extractJsonStringField(request.body, "mode", mode) ||
+                    (mode != "task" && mode != "assistant")) {
+                    error = "Chat name and mode (task or assistant) are required";
+                } else success = agent.createChat(name, mode, error);
             } else if (request.path == "/api/chats/select") {
                 std::string chatId;
                 if (!extractJsonStringField(request.body, "chat_id", chatId) || chatId.empty()) {
@@ -743,6 +760,8 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
                     error = "chat_id is required";
                 } else if (!agent.selectChat(chatId, error)) {
                     success = false;
+                } else if (agent.activeChatMode() != "task") {
+                    error = "Task endpoints are only available in the Tasks chat";
                 } else if (request.path == "/api/task/transition") {
                     std::string action;
                     if (!extractJsonStringField(request.body, "action", action) || action.empty()) {
@@ -787,6 +806,30 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
                 sendHttpResponse(client, 400, "application/json", "{\"error\":\"" +
                                      jsonEscape(error) + "\"," +
                                      buildAgentStateFields(agent) + "}");
+            }
+        } else if (request.method == "GET" && request.path == "/api/document-index/status") {
+            sendHttpResponse(client, 200, "application/json", documentIndexer.statusJson());
+        } else if (request.method == "POST" && request.path == "/api/document-index/index") {
+            std::string strategy, error;
+            const bool parsed = extractJsonStringField(request.body, "strategy", strategy);
+            const bool started = parsed && documentIndexer.start(strategy, error);
+            sendHttpResponse(client, started ? 202 : 400, "application/json",
+                started ? "{\"accepted\":true}" : "{\"error\":\"" + jsonEscape(parsed ? error : "strategy is required") + "\"}");
+        } else if (request.method == "POST" && (request.path == "/api/document-index/search" || request.path == "/api/document-index/compare")) {
+            std::string query, strategy;
+            extractJsonStringField(request.body, "query", query);
+            extractJsonStringField(request.body, "strategy", strategy);
+            int topK = 5;
+            std::smatch match;
+            if (std::regex_search(request.body, match, std::regex(R"("top_k"\s*:\s*(\d+))"))) { try { topK = std::stoi(match[1].str()); } catch (...) { topK = 21; } }
+            const bool comparing = request.path == "/api/document-index/compare";
+            if (!comparing && (strategy != "fixed" && strategy != "structural")) {
+                sendHttpResponse(client, 400, "application/json", "{\"error\":\"strategy must be fixed or structural\"}");
+            } else if (!document_index::DocumentIndexer::validSearchRequest(query, comparing ? "fixed" : strategy, topK)) {
+                sendHttpResponse(client, 400, "application/json", "{\"error\":\"query or top_k is invalid\"}");
+            } else {
+                const std::string result = comparing ? documentIndexer.compareJson(query, topK) : documentIndexer.searchJson(query, strategy, topK);
+                sendHttpResponse(client, result.rfind("{\"error\":", 0) == 0 ? 502 : 200, "application/json", result);
             }
         } else if (request.method == "GET" && request.path == "/api/state") {
             sendHttpResponse(client, 200, "application/json",

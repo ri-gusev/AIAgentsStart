@@ -65,6 +65,7 @@ public:
     const std::vector<StoredChat>& chats() const;
     const std::string& activeChatId() const;
     const std::string& activeChatName() const;
+    const std::string& activeChatMode() const;
     const std::string& memoryMode() const;
     const std::string& personalization() const;
     const std::vector<LongTermMemoryFact>& workingMemoryFacts() const;
@@ -73,6 +74,7 @@ public:
     const ProjectTaskState& taskState() const;
     const std::string& projectSummary() const;
     bool createChat(const std::string& name, std::string& error);
+    bool createChat(const std::string& name, const std::string& mode, std::string& error);
     bool deleteChat(const std::string& chatId, std::string& error);
     bool selectChat(const std::string& chatId, std::string& error);
     bool setMemoryMode(const std::string& mode, std::string& error);
@@ -104,6 +106,7 @@ public:
     bool respond(const std::string& userMessage, std::string& answer, std::string& error);
 
 private:
+    bool requireTaskChat(std::string& error);
     struct Config {
         std::string model;
         std::string baseInstruction;
