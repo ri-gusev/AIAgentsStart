@@ -414,6 +414,8 @@ function addMessage(role, text = '', scroll = true) {
   if (safeRole === 'loading') {
     content.classList.add('loading');
     content.innerHTML = '<div class="loader" aria-label="Ожидание"><i></i><i></i><i></i></div>';
+  } else if (safeRole === 'assistant' && typeof window.renderAssistantMarkdown === 'function') {
+    window.renderAssistantMarkdown(content, typeof text === 'string' ? text : '');
   } else {
     content.textContent = typeof text === 'string' ? text : '';
   }

@@ -912,6 +912,12 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
             else if (request.method == "GET" && request.path == "/styles.css") { fileName = "styles.css"; contentType = "text/css"; }
             else if (request.method == "GET" && request.path == "/app.js") { fileName = "app.js"; contentType = "application/javascript"; }
             else if (request.method == "GET" && request.path == "/reminders.js") { fileName = "reminders.js"; contentType = "application/javascript"; }
+            else if (request.method == "GET" && request.path == "/chat_markdown.js") { fileName = "chat_markdown.js"; contentType = "application/javascript"; }
+            else if (request.method == "GET" && request.path.rfind("/vendor/chat-markdown/", 0) == 0) {
+                static const std::vector<std::string> assets = {"async_hooks.mjs", "buffer.mjs", "core.mjs", "dark-plus.mjs", "engine.mjs", "events.mjs", "lang-c.mjs", "lang-cmake.mjs", "lang-cpp.mjs", "lang-csharp.mjs", "lang-css.mjs", "lang-diff.mjs", "lang-dockerfile.mjs", "lang-go.mjs", "lang-html.mjs", "lang-java.mjs", "lang-javascript.mjs", "lang-json.mjs", "lang-jsonc.mjs", "lang-jsx.mjs", "lang-markdown.mjs", "lang-powershell.mjs", "lang-python.mjs", "lang-rust.mjs", "lang-shellscript.mjs", "lang-sql.mjs", "lang-toml.mjs", "lang-tsx.mjs", "lang-typescript.mjs", "lang-xml.mjs", "lang-yaml.mjs", "markdown-it.js", "process.mjs", "tty.mjs", "wasm.mjs"};
+                const std::string asset = request.path.substr(22);
+                if (std::find(assets.begin(), assets.end(), asset) != assets.end()) { fileName = "vendor/chat-markdown/" + asset; contentType = "application/javascript"; }
+            }
             const std::string content = fileName.empty() ? "" : readFile(fileName);
             sendHttpResponse(client, content.empty() ? 404 : 200, content.empty() ? "text/plain" : contentType, content.empty() ? "Not found" : content);
         }
