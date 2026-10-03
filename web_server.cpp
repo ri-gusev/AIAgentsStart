@@ -214,6 +214,30 @@ bool extractJsonStringField(const std::string& json, const std::string& field,
     return extractJsonStringField(json, field, value) ? value : std::string{};
 }
 
+std::string serializeRagSources(const std::vector<Agent::RagSource>& sourcesList) {
+    std::string sources = "[";
+    for (const auto& source : sourcesList) {
+        if (sources.size() > 1) sources += ',';
+        sources += "{\"file\":\"" + jsonEscape(source.file) + "\",\"section\":\"" + jsonEscape(source.section) +
+        "\",\"chunk_id\":\"" + jsonEscape(source.chunkId) + "\",\"source_type\":\"" + jsonEscape(source.sourceType) +
+        "\",\"page\":" + std::to_string(source.page) + ",\"line_start\":" + std::to_string(source.lineStart) +
+        ",\"line_end\":" + std::to_string(source.lineEnd) +
+        ",\"relevance_score\":" + std::to_string(source.relevanceScore) + "}";
+    }
+    sources += ']';
+    return sources;
+}
+
+std::string serializeRagQuotes(const std::vector<rag::Quote>& quotes) {
+    std::string result = "[";
+    for (const auto& quote : quotes) {
+        if (result.size() > 1) result += ',';
+        result += "{\"chunk_id\":\"" + jsonEscape(quote.chunkId) + "\",\"text\":\"" + jsonEscape(quote.text) +
+            "\",\"language\":\"" + jsonEscape(quote.language) + "\"}";
+    }
+    return result + ']';
+}
+
 std::string buildAgentStateFields(const Agent& agent) {
     const Agent::TokenStatistics& usage = agent.tokenStatistics();
     const Agent::CostStatistics cost = agent.costStatistics();
@@ -271,16 +295,7 @@ std::string buildAgentStateFields(const Agent& agent) {
     for (const auto& message : agent.visibleConversation()) {
         if (!first) conversationJson += ',';
         first = false;
-        std::string sources = "[";
-        for (const auto& source : message.ragSources) {
-            if (sources.size() > 1) sources += ',';
-            sources += "{\"file\":\"" + jsonEscape(source.file) + "\",\"section\":\"" + jsonEscape(source.section) +
-                "\",\"chunk_id\":\"" + jsonEscape(source.chunkId) + "\",\"source_type\":\"" + jsonEscape(source.sourceType) +
-                "\",\"page\":" + std::to_string(source.page) + ",\"line_start\":" + std::to_string(source.lineStart) +
-                ",\"line_end\":" + std::to_string(source.lineEnd) +
-                ",\"relevance_score\":" + std::to_string(source.relevanceScore) + "}";
-        }
-        sources += ']';
+        const std::string sources = serializeRagSources(message.ragSources);
         conversationJson += "{\"id\":\"" + jsonEscape(message.id) +
                             "\",\"role\":\"" + jsonEscape(message.role) +
                             "\",\"content\":\"" + jsonEscape(message.content) +
@@ -289,7 +304,7 @@ std::string buildAgentStateFields(const Agent& agent) {
                             ",\"working\":" + std::string(message.workingSaved ? "true" : "false") +
                             ",\"long_term\":" + std::string(message.longTermSaved ? "true" : "false") +
                             ",\"rag_enabled\":" + std::string(message.ragEnabled ? "true" : "false") +
-                            ",\"rag_sources\":" + sources + "}";
+                            ",\"rag_sources\":" + sources + ",\"rag_quotes\":" + serializeRagQuotes(message.ragQuotes) + "}";
     }
     conversationJson += ']';
 
@@ -746,9 +761,17 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
                         sendHttpResponse(client, agent.inputRejected() ? 400 : 500, "application/json",
                             "{\"error\":\"" + jsonEscape(error) + "\"," + buildAgentStateFields(agent) + "}");
                     } else {
+                        const auto& transcript = agent.visibleConversation();
+                        const auto result = std::find_if(transcript.rbegin(), transcript.rend(), [](const auto& message) {
+                            return message.role == "assistant" && message.ragEnabled;
+                        });
+                        const std::vector<Agent::RagSource> usedSources = useRag && result != transcript.rend() ? result->ragSources : std::vector<Agent::RagSource>{};
+                        const std::vector<rag::Quote> usedQuotes = useRag && result != transcript.rend() ? result->ragQuotes : std::vector<rag::Quote>{};
                         sendHttpResponse(client, 200, "application/json",
                             "{\"model\":\"" + jsonEscape(agent.modelName()) + "\",\"answer\":\"" +
-                            jsonEscape(answer) + "\",\"rag_no_sources\":" + (useRag && sources.empty() ? "true" : "false") +
+                            jsonEscape(answer) + "\",\"sources\":" + serializeRagSources(usedSources) +
+                            ",\"quotes\":" + serializeRagQuotes(usedQuotes) +
+                            ",\"rag_no_sources\":" + (useRag && usedSources.empty() ? "true" : "false") +
                             "," + buildAgentStateFields(agent) + "}");
                     }
                 }

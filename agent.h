@@ -3,6 +3,7 @@
 #include "api_client.h"
 #include "invariant_store.h"
 #include "memory_store.h"
+#include "rag_grounding.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -34,14 +35,7 @@ public:
         double summaryUsd = 0.0;
     };
 
-    struct RagSource {
-        std::string file;
-        std::string section;
-        std::string chunkId;
-        std::string sourceType;
-        int page=0, lineStart=0, lineEnd=0;
-        double relevanceScore=0;
-    };
+    using RagSource = rag::Source;
 
     struct ChatMessage {
         std::string role;
@@ -51,6 +45,7 @@ public:
         bool longTermSaved = false;
         std::vector<RagSource> ragSources;
         bool ragEnabled = false;
+        std::vector<rag::Quote> ragQuotes;
     };
 
     explicit Agent(const std::string& configPath = "agent_config.local.json");
@@ -200,6 +195,7 @@ private:
     bool reviewAnswer(const std::string& userMessage, const std::string& draft,
                       std::string& finalAnswer, std::string& error,
                       const std::string& toolEvidence = {}, bool includeTaskContext = true);
+    void applyGroundedResponse(std::string& response);
     std::string buildLongTermMemoryPrompt() const;
     std::string buildMemoryDecisionConversation(const std::string& userMessage,
                                                 const std::string& answer) const;
@@ -222,6 +218,9 @@ private:
     std::string retrievalContext_;
     bool retrievalEnabled_ = false;
     std::vector<RagSource> retrievalSources_;
+    std::vector<rag::Quote> retrievalQuotes_;
+    rag::GroundingContext groundingContext_;
+    bool groundingInsufficient_ = false;
     std::string apiKey_;
     ApiClient apiClient_;
     McpManager* mcpManager_ = nullptr;

@@ -76,6 +76,12 @@ input, select { width: 100%; min-width: 0; color: var(--ink); border: 1px solid 
 .rag-sources { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .rag-sources summary { cursor: pointer; }
 .rag-sources ul { margin: 7px 0 0; padding-left: 18px; }
+.rag-sources li + li { margin-top: 10px; }
+.rag-chunk-id { display: block; margin-top: 3px; font: 10px/1.5 Consolas, monospace; opacity: .8; }
+.rag-evidence { margin-top: 6px; }
+.rag-evidence > summary { color: var(--green); font-size: 11px; }
+.rag-quote-body { max-height: 280px; overflow: auto; margin-top: 7px; }
+.rag-quote-body blockquote { margin: 0; padding: 9px 12px; border-left: 3px solid var(--green); background: rgba(68,87,196,.06); border-radius: 0 8px 8px 0; white-space: pre-wrap; color: var(--ink); }
 .rag-controls { flex-wrap: wrap; }
 .question-title-row { flex-wrap: wrap; }
 .rag-uploads { margin-top: 8px; color: var(--muted); font-size: 11px; }

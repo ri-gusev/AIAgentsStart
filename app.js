@@ -506,7 +506,7 @@ function renderConversation(messages = [], keepPosition = false) {
   } else {
     messages.forEach((item) => {
       const message = addMessage(item.role, item.content, false);
-      if (item.role === 'assistant') renderRagSources(message, item.rag_sources, item.rag_enabled);
+      if (item.role === 'assistant') renderRagSources(message, item.rag_sources, item.rag_enabled, item.rag_quotes);
     });
   }
   if (keepPosition) chatLog.scrollTop = previousTop;
@@ -821,7 +821,7 @@ async function askAgent(question) {
       return;
     }
     if (!renderAgentState(data)) throw new Error('State response missing');
-    if (data.rag_no_sources) showRagStatus('Релевантных источников не найдено. Ответ без RAG-контекста.');
+    if (data.rag_no_sources) showRagStatus('Недостаточно подтверждённых источников для ответа.');
   } catch (error) {
     pendingMessage.remove();
     addMessage('error', error.ragError ? 'RAG: ' + error.message
@@ -1041,7 +1041,7 @@ setInterval(() => { if (!document.hidden) refreshMcpServers(); }, 15000);
 // returns the complete current Agent state.
 
 // Retrieval stays in the existing chat flow. Only source metadata reaches this UI.
-function renderRagSources(message, sources, ragEnabled = false) {
+function renderRagSources(message, sources, ragEnabled = false, quotes = []) {
   if (!Array.isArray(sources)) sources = [];
   if (!ragEnabled && !sources.length) return;
   if (!sources.length) {
@@ -1061,11 +1061,36 @@ function renderRagSources(message, sources, ragEnabled = false) {
     const location = source.page > 0 ? ' · стр. ' + source.page
       : source.line_start > 0 ? ' · строки ' + source.line_start + '–' + source.line_end : '';
     const score = Number.isFinite(source.relevance_score) ? ' · relevance ' + source.relevance_score.toFixed(3) : '';
+    const chunkId = String(source.chunk_id || '');
     const label = String(source.file || '') + ' — ' + String(source.section || 'Общий раздел') + location + score;
-    if (seen.has(label)) return;
-    seen.add(label);
+    if (seen.has(chunkId)) return;
+    seen.add(chunkId);
     const item = document.createElement('li');
     item.textContent = label;
+    const id = document.createElement('small');
+    id.className = 'rag-chunk-id';
+    id.textContent = 'chunk ' + chunkId;
+    item.append(id);
+    (Array.isArray(quotes) ? quotes : []).filter((quote) => quote.chunk_id === chunkId && typeof quote.text === 'string').forEach((quote) => {
+      const evidence = document.createElement('details');
+      evidence.className = 'rag-evidence';
+      const title = document.createElement('summary');
+      title.textContent = 'Evidence · цитата из источника';
+      const body = document.createElement('div');
+      body.className = 'rag-quote-body';
+      if (quote.language && typeof window.renderAssistantMarkdown === 'function') {
+        // A fence longer than any source fence keeps quoted code inside one block.
+        const runs = quote.text.match(/`+/g) || [];
+        const fence = '`'.repeat(Math.max(3, ...runs.map((run) => run.length + 1)));
+        window.renderAssistantMarkdown(body, fence + quote.language + '\n' + quote.text + '\n' + fence);
+      } else {
+        const block = document.createElement('blockquote');
+        block.textContent = quote.text;
+        body.append(block);
+      }
+      evidence.append(title, body);
+      item.append(evidence);
+    });
     list.append(item);
   });
   details.append(summary, list);

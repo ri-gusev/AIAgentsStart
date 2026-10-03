@@ -1,0 +1,713 @@
+{
+  "llm_transport": "mock/scripted (no live OpenAI call)",
+  "embedding_transport": "installed local Ollama bge-m3",
+  "index": "existing document_index.db",
+  "questions": [
+    {
+      "expected_behavior": "answer",
+      "expected_chunk_ids": [
+        "document_indexer.cpp:structural:0027"
+      ],
+      "expected_facts": [
+        "bge-m3",
+        "/api/embed"
+      ],
+      "expected_sources": [
+        {
+          "chunk_id": "document_indexer.cpp:structural:0027",
+          "file": "document_indexer.cpp",
+          "line_end": 0,
+          "line_start": 0,
+          "page": 0,
+          "section": "DocumentIndexer::validSearchRequest",
+          "source_type": "project"
+        }
+      ],
+      "id": 1,
+      "question": "Which local model and HTTP endpoint does DocumentIndexer::embedTexts use for bge-m3 embeddings?",
+      "retrieval_query": "DocumentIndexer::embedTexts bge-m3 Ollama embedding model HTTP endpoint",
+      "actual_answer": "bge-m3\n/api/embed\n",
+      "actual_sources": [
+        {
+          "file": "document_indexer.cpp",
+          "section": "DocumentIndexer::validSearchRequest",
+          "chunk_id": "document_indexer.cpp:structural:0027",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.63366
+        }
+      ],
+      "actual_quotes": [
+        {
+          "chunk_id": "document_indexer.cpp:structural:0027",
+          "text": "bool DocumentIndexer::validSearchRequest(const std::string& query, int topK) {\n    return !trim(query).empty() && query.size() <= 16000 && topK >= 1 && topK <= 20;\n}\nstd::vector<size_t> DocumentIndexer::rankVectors(const std::vector<float>& query,\n        const std::vector<std::vector<float>>& vectors, int topK) {\n    std::vector<size_t> order(vectors.size());\n    for (size_t i = 0; i < order.size(); ++i) order[i] = i;\n    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {\n        return cosineSimilarity(query, vectors[a]) > cosineSimilarity(query, vectors[b]);\n    });\n    if (topK >= 0 && order.size() > static_cast<size_t>(topK)) order.resize(topK);\n    return order;\n}\nbool DocumentIndexer::embedTexts(const std::vector<std::string>& texts,\n        std::vector<std::vector<float>>& vectors, std::string& error) {\n    vectors.clear(); error.clear();\n    for (size_t start = 0; start < texts.size(); start += kBatchSize) {\n        const size_t end = std::min(start + kBatchSize, texts.size());\n        std::string body = \"{\\\"model\\\":\\\"\" + escape(env(\"OLLAMA_EMBED_MODEL\", \"bge-m3\")) + \"\\\",\\\"input\\\":[\";\n        for (size_t i = start; i < end; ++i) { if (i > start) body += ','; body += '\"' + escape(texts[i]) + '\"'; }\n        std::string response;\n        if (!curlRequest(env(\"OLLAMA_URL\", \"http://127.0.0.1:11434\") + \"/api/embed\", body + \"]}\", response, error)) return false;\n        app_json::JsonValue root;\n        if (!app_json::JsonParser(response).parse(root, error)) { error = \"Invalid Ollama embedding response\"; return false; }\n        const auto* array = root.member(\"embeddings\");\n        if (!array || array->type != app_json::JsonValue::Type::Array || array->array.size() != end - start) {\n            error = \"Invalid Ollama embedding response\"; return false;\n        }\n        for (const auto& item : array->array) {\n            if (item.type != app_json::JsonValue::Type::Array || item.array.empty()) { error = \"Invalid embedding vector\"; return false; }\n            std::vector<float> vector;\n            for (const auto& number : item.array) {\n                try {\n                    if (number.type != app_json::JsonValue::Type::Number) throw std::runtime_error(\"number\");",
+          "language": "cpp"
+        }
+      ],
+      "retrieved_candidates_after_filter": [
+        {
+          "file": "README.md",
+          "section": "Stack",
+          "chunk_id": "README.md:structural:0003",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.654664
+        },
+        {
+          "file": "document_indexer.cpp",
+          "section": "DocumentIndexer::validSearchRequest",
+          "chunk_id": "document_indexer.cpp:structural:0027",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.63366
+        },
+        {
+          "file": "document_indexer.cpp",
+          "section": "bindText",
+          "chunk_id": "document_indexer.cpp:structural:0018",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.503124
+        },
+        {
+          "file": "document_indexer.cpp",
+          "section": "curlRequest",
+          "chunk_id": "document_indexer.cpp:structural:0012",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.498896
+        }
+      ],
+      "backend_skipped_answer_generation": false,
+      "passed": true
+    },
+    {
+      "expected_behavior": "answer",
+      "expected_chunk_ids": [
+        "reminder_scheduler.cpp:structural:0004"
+      ],
+      "expected_facts": [
+        "wake_.notify_all()",
+        "worker_.join()"
+      ],
+      "expected_sources": [
+        {
+          "chunk_id": "reminder_scheduler.cpp:structural:0004",
+          "file": "reminder_scheduler.cpp",
+          "line_end": 0,
+          "line_start": 0,
+          "page": 0,
+          "section": "ReminderScheduler::stop",
+          "source_type": "project"
+        }
+      ],
+      "id": 2,
+      "question": "How does ReminderScheduler::stop stop and join its worker thread?",
+      "retrieval_query": "ReminderScheduler::stop reminder_scheduler.cpp worker stopped wake_.notify_all worker_.join",
+      "actual_answer": "wake_.notify_all()\nworker_.join()\n",
+      "actual_sources": [
+        {
+          "file": "reminder_scheduler.cpp",
+          "section": "ReminderScheduler::stop",
+          "chunk_id": "reminder_scheduler.cpp:structural:0004",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.926381
+        }
+      ],
+      "actual_quotes": [
+        {
+          "chunk_id": "reminder_scheduler.cpp:structural:0004",
+          "text": "void ReminderScheduler::stop() {\n    { std::lock_guard<std::mutex> lock(mutex_); stopped_ = true; }\n    wake_.notify_all();\n    if (worker_.joinable()) worker_.join();\n}",
+          "language": "cpp"
+        }
+      ],
+      "retrieved_candidates_after_filter": [
+        {
+          "file": "reminder_scheduler.cpp",
+          "section": "ReminderScheduler::stop",
+          "chunk_id": "reminder_scheduler.cpp:structural:0004",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.926381
+        },
+        {
+          "file": "reminder_scheduler.cpp",
+          "section": "ReminderScheduler::start",
+          "chunk_id": "reminder_scheduler.cpp:structural:0003",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.784864
+        },
+        {
+          "file": "codeforces_watcher.cpp",
+          "section": "CodeforcesContestWatcher::stop",
+          "chunk_id": "codeforces_watcher.cpp:structural:0005",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.771004
+        },
+        {
+          "file": "reminder_scheduler.cpp",
+          "section": "reminder_scheduler.cpp",
+          "chunk_id": "reminder_scheduler.cpp:structural:0001",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.770938
+        }
+      ],
+      "backend_skipped_answer_generation": false,
+      "passed": true
+    },
+    {
+      "expected_behavior": "answer",
+      "expected_chunk_ids": [
+        "codeforces_mcp_server/codeforces_client.py:structural:0001"
+      ],
+      "expected_facts": [
+        "https://codeforces.com/api/contest.list?gym=false"
+      ],
+      "expected_sources": [
+        {
+          "chunk_id": "codeforces_mcp_server/codeforces_client.py:structural:0001",
+          "file": "codeforces_mcp_server/codeforces_client.py",
+          "line_end": 0,
+          "line_start": 0,
+          "page": 0,
+          "section": "codeforces_client.py",
+          "source_type": "project"
+        }
+      ],
+      "id": 3,
+      "question": "Which Codeforces contest.list URL is stored in CONTEST_LIST_URL in codeforces_client.py?",
+      "retrieval_query": "codeforces_client.py CONTEST_LIST_URL Codeforces contest.list URL constant",
+      "actual_answer": "https://codeforces.com/api/contest.list?gym=false\n",
+      "actual_sources": [
+        {
+          "file": "codeforces_mcp_server/codeforces_client.py",
+          "section": "codeforces_client.py",
+          "chunk_id": "codeforces_mcp_server/codeforces_client.py:structural:0001",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.79275
+        }
+      ],
+      "actual_quotes": [
+        {
+          "chunk_id": "codeforces_mcp_server/codeforces_client.py:structural:0001",
+          "text": "\"\"\"Public Codeforces API client; transport is injectable for offline tests.\"\"\"\n\nimport json\nfrom urllib.error import HTTPError, URLError\nfrom urllib.request import Request, urlopen\n\nCONTEST_LIST_URL = \"https://codeforces.com/api/contest.list?gym=false\"",
+          "language": "python"
+        }
+      ],
+      "retrieved_candidates_after_filter": [
+        {
+          "file": "codeforces_mcp_server/codeforces_client.py",
+          "section": "codeforces_client.py",
+          "chunk_id": "codeforces_mcp_server/codeforces_client.py:structural:0001",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.79275
+        },
+        {
+          "file": "codeforces_mcp_server/codeforces_client.py",
+          "section": "def upcoming_contests",
+          "chunk_id": "codeforces_mcp_server/codeforces_client.py:structural:0006",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.730343
+        },
+        {
+          "file": "codeforces_mcp_server/server.py",
+          "section": "def sync_contests",
+          "chunk_id": "codeforces_mcp_server/server.py:structural:0002",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.697614
+        },
+        {
+          "file": "codeforces_mcp_server/server.py",
+          "section": "def get_new_contests",
+          "chunk_id": "codeforces_mcp_server/server.py:structural:0003",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.668233
+        }
+      ],
+      "backend_skipped_answer_generation": false,
+      "passed": true
+    },
+    {
+      "expected_behavior": "answer",
+      "expected_chunk_ids": [
+        "agent.cpp:structural:0118"
+      ],
+      "expected_facts": [
+        "Maximum of 8 MCP tool calls reached"
+      ],
+      "expected_sources": [
+        {
+          "chunk_id": "agent.cpp:structural:0118",
+          "file": "agent.cpp",
+          "line_end": 0,
+          "line_start": 0,
+          "page": 0,
+          "section": "Agent::setMcpManager",
+          "source_type": "project"
+        }
+      ],
+      "id": 4,
+      "question": "What is the MCP tool-call limit in Agent::generateToolAssistedAnswer and what error is returned when it is exceeded?",
+      "retrieval_query": "Agent::generateToolAssistedAnswer agent.cpp MCP tool-call limit exceeded error",
+      "actual_answer": "Maximum of 8 MCP tool calls reached\n",
+      "actual_sources": [
+        {
+          "file": "agent.cpp",
+          "section": "Agent::setMcpManager",
+          "chunk_id": "agent.cpp:structural:0118",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.772832
+        }
+      ],
+      "actual_quotes": [
+        {
+          "chunk_id": "agent.cpp:structural:0118",
+          "text": "}\n        if (containsSecret(completion.assistantMessageJson)) {\n            error = \"Tool call rejected: possible secret credentials\"; return false;\n        }\n        if (completion.toolCalls.empty()) { draft = completion.content; return true; }\n        if (called + completion.toolCalls.size() > 8) {\n            warnings_.push_back(\"MCP tool limit reached; completed tool actions are not rolled back.\");\n            error = \"Maximum of 8 MCP tool calls reached\"; return false;\n        }\n        messages.pop_back();\n        messages += ',' + completion.assistantMessageJson;\n        for (const auto& call : completion.toolCalls) {\n            if (std::find(seenIds.begin(), seenIds.end(), call.id) != seenIds.end()) {\n                error = \"Duplicate tool_call ID across agent iterations\"; return false;\n            }\n            seenIds.push_back(call.id);\n            ++called;\n            std::string result, toolError;\n            bool success = false;\n            if (containsSecret(call.argumentsJson)) toolError = \"Tool arguments rejected: possible secret credentials\";\n            else success = mcpManager_->callTool(call.name, call.argumentsJson, result, toolError);\n            if (!success) result = \"{\\\"success\\\":false,\\\"error\\\":\\\"\" + app_json::jsonEscape(toolError) + \"\\\"}\";\n            else if (containsSecret(result)) result = \"{\\\"success\\\":false,\\\"error\\\":\\\"Tool result withheld: possible secret credentials\\\"}\";\n            evidence += call.name + \": \" + result + \"\\n\";\n            messages += \",{\\\"role\\\":\\\"tool\\\",\\\"tool_call_id\\\":\\\"\" + app_json::jsonEscape(call.id) +\n                        \"\\\",\\\"content\\\":\\\"\" + app_json::jsonEscape(result) + \"\\\"}\";\n        }\n        messages += ']';\n    }\n}",
+          "language": "cpp"
+        }
+      ],
+      "retrieved_candidates_after_filter": [
+        {
+          "file": "agent.cpp",
+          "section": "Agent::setMcpManager",
+          "chunk_id": "agent.cpp:structural:0117",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.774694
+        },
+        {
+          "file": "agent.cpp",
+          "section": "Agent::setMcpManager",
+          "chunk_id": "agent.cpp:structural:0118",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.772832
+        },
+        {
+          "file": "mcp_client.cpp",
+          "section": "McpClient::refreshTools",
+          "chunk_id": "mcp_client.cpp:structural:0012",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.704702
+        },
+        {
+          "file": "mcp_client.cpp",
+          "section": "McpClient::refreshTools",
+          "chunk_id": "mcp_client.cpp:structural:0011",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.694675
+        }
+      ],
+      "backend_skipped_answer_generation": false,
+      "passed": true
+    },
+    {
+      "expected_behavior": "answer",
+      "expected_chunk_ids": [
+        "document_indexer.cpp:structural:0025"
+      ],
+      "expected_facts": [
+        "buffer.size() >= maxChunk && boundary"
+      ],
+      "expected_sources": [
+        {
+          "chunk_id": "document_indexer.cpp:structural:0025",
+          "file": "document_indexer.cpp",
+          "line_end": 0,
+          "line_start": 0,
+          "page": 0,
+          "section": "DocumentIndexer::structuralChunks",
+          "source_type": "project"
+        }
+      ],
+      "id": 5,
+      "question": "When does DocumentIndexer::structuralChunks flush a buffer after reaching maxChunk at a structural boundary?",
+      "retrieval_query": "DocumentIndexer::structuralChunks document_indexer.cpp maxChunk buffer.size boundary flush",
+      "actual_answer": "buffer.size() >= maxChunk && boundary\n",
+      "actual_sources": [
+        {
+          "file": "document_indexer.cpp",
+          "section": "DocumentIndexer::structuralChunks",
+          "chunk_id": "document_indexer.cpp:structural:0025",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.823772
+        }
+      ],
+      "actual_quotes": [
+        {
+          "chunk_id": "document_indexer.cpp:structural:0025",
+          "text": "const bool boundary = clean.empty() || clean.back() == ';' || clean == \"}\" || clean == \"};\";\n        if (maxChunk && buffer.size() >= maxChunk && boundary) flush();\n    }\n    flush();\n    return chunks;\n}",
+          "language": "cpp"
+        }
+      ],
+      "retrieved_candidates_after_filter": [
+        {
+          "file": "document_indexer.cpp",
+          "section": "DocumentIndexer::structuralChunks",
+          "chunk_id": "document_indexer.cpp:structural:0025",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.823772
+        },
+        {
+          "file": "document_indexer.cpp",
+          "section": "DocumentIndexer::structuralChunks",
+          "chunk_id": "document_indexer.cpp:structural:0024",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.766066
+        },
+        {
+          "file": "document_indexer.h",
+          "section": "class DocumentIndexer",
+          "chunk_id": "document_indexer.h:structural:0007",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.689718
+        },
+        {
+          "file": "document_indexer.cpp",
+          "section": "DocumentIndexer::runJob",
+          "chunk_id": "document_indexer.cpp:structural:0032",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.659865
+        }
+      ],
+      "backend_skipped_answer_generation": false,
+      "passed": true
+    },
+    {
+      "expected_behavior": "answer",
+      "expected_chunk_ids": [
+        "upload:1:page:1:structural:0001"
+      ],
+      "expected_facts": [
+        "1545"
+      ],
+      "expected_sources": [
+        {
+          "chunk_id": "upload:1:page:1:structural:0001",
+          "file": "03_ComplexNumbers (1).pdf",
+          "line_end": 35,
+          "line_start": 1,
+          "page": 1,
+          "section": "03_ComplexNumbers (1).pdf",
+          "source_type": "upload"
+        }
+      ],
+      "id": 6,
+      "question": "In the uploaded ComplexNumbers chapter, what year is given for Cardano's Ars Magna?",
+      "retrieval_query": "Cardano Ars Magna publication year ComplexNumbers chapter",
+      "actual_answer": "1545\n",
+      "actual_sources": [
+        {
+          "file": "03_ComplexNumbers (1).pdf",
+          "section": "03_ComplexNumbers (1).pdf",
+          "chunk_id": "upload:1:page:1:structural:0001",
+          "source_type": "upload",
+          "page": 1,
+          "line_start": 1,
+          "line_end": 35,
+          "relevance_score": 0.612113
+        }
+      ],
+      "actual_quotes": [
+        {
+          "chunk_id": "upload:1:page:1:structural:0001",
+          "text": "Глава 3\nКомплексные числа\nВ книге Дж. Кардано (G. Cardano) /guillemotleft.cyrВеликое искусство/guillemotright.cyr (/guillemotleft.cyrArs Magna/guillemotright.cyr), изданной в 1545 г.,\nможно встретить следующую задачу. Число 10 требуется разделить на две части, произве-\nдение которых равно 40. Используя современную алгебраическую нотацию, мы записы ваем\nсистему уравнений {\nx +y = 10,\nxy = 40.\nПо теореме, обратной теореме Виета, получаем, что x и y суть два решения квадратного\nуравнения\nz2 − 10z + 40 = 0.\nДискриминант этого уравнения отрицательный, и действител ьных решений задача не имеет.\nНо все же, если воспользоваться известной формулой для корн ей квадратного уравнения, мы\nполучаем:\nz1, 2 = 5 ±\n√\n25 − 40 = 5 ±\n√\n−15.\n/guillemotleft.cyrМнимое/guillemotright.cyr число√−15 будем воспринимать как некую сущность, которая, будучи воз ведена\nв квадрат, дает −15 (конечно, этому условию не удовлетворяет ни одно веществен ное число).\nТаким образом, в качестве ответа к задаче мы могли бы предлож ить /guillemotleft.cyrчисла/guillemotright.cyr5 + √−15\nи 5 − √−15. Мы даже можем сделать проверку и убедиться, что два указанн ых /guillemotleft.cyrчисла/guillemotright.cyr\nдействительно удовлетворяют условию задачи:\n(5 + √−15) + (5 − √−15) = 10,\n(5 + √−15)(5 − √−15) = 5 2 − (√−15)2 = 25 − (−15) = 40.\nКардано тоже находит эти два решения. Никакой практической ценности в них он не увидел,\nи, скорее всего, этот пример был приведен им как некий курьез . Но это было первое известное\nпоявление мнимых чисел (т. е. корней из отрицательных чисел ).\nИнтересно отметить, что в том же сочинении была впервые опуб ликована найденная ранее\nС. Ферро и Н. Тарталья (S. Ferro, N. Tartaglia) формула для ре шения кубического уравнения\nx3 +px +q = 0. (3. 1)\nЕго корни предлагалось находить по формуле 1\nx = 3√u + 3√v, (3. 2)\n1Это известные формулы Кардано . Подробности см. в разделах 3.6.2, 3.6.3.",
+          "language": ""
+        }
+      ],
+      "retrieved_candidates_after_filter": [
+        {
+          "file": "03_ComplexNumbers (1).pdf",
+          "section": "03_ComplexNumbers (1).pdf",
+          "chunk_id": "upload:1:page:1:structural:0001",
+          "source_type": "upload",
+          "page": 1,
+          "line_start": 1,
+          "line_end": 35,
+          "relevance_score": 0.612113
+        }
+      ],
+      "backend_skipped_answer_generation": false,
+      "passed": true
+    },
+    {
+      "expected_behavior": "answer",
+      "expected_chunk_ids": [
+        "reminder_scheduler.cpp:structural:0003",
+        "reminder_scheduler.cpp:structural:0004"
+      ],
+      "expected_facts": [
+        "std::thread",
+        "worker_.join()"
+      ],
+      "expected_sources": [
+        {
+          "chunk_id": "reminder_scheduler.cpp:structural:0003",
+          "file": "reminder_scheduler.cpp",
+          "line_end": 0,
+          "line_start": 0,
+          "page": 0,
+          "section": "ReminderScheduler::start",
+          "source_type": "project"
+        },
+        {
+          "chunk_id": "reminder_scheduler.cpp:structural:0004",
+          "file": "reminder_scheduler.cpp",
+          "line_end": 0,
+          "line_start": 0,
+          "page": 0,
+          "section": "ReminderScheduler::stop",
+          "source_type": "project"
+        }
+      ],
+      "id": 7,
+      "question": "How do ReminderScheduler::start and ReminderScheduler::stop respectively create and join the worker thread?",
+      "retrieval_query": "ReminderScheduler::start ReminderScheduler::stop reminder_scheduler.cpp std::thread worker_.join",
+      "actual_answer": "std::thread\nworker_.join()\n",
+      "actual_sources": [
+        {
+          "file": "reminder_scheduler.cpp",
+          "section": "ReminderScheduler::start",
+          "chunk_id": "reminder_scheduler.cpp:structural:0003",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.959309
+        },
+        {
+          "file": "reminder_scheduler.cpp",
+          "section": "ReminderScheduler::stop",
+          "chunk_id": "reminder_scheduler.cpp:structural:0004",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.917156
+        }
+      ],
+      "actual_quotes": [
+        {
+          "chunk_id": "reminder_scheduler.cpp:structural:0003",
+          "text": "void ReminderScheduler::start() {\n    if (worker_.joinable()) return;\n    { std::lock_guard<std::mutex> lock(mutex_); stopped_ = false; }\n    worker_ = std::thread([this] { run(); });\n}",
+          "language": "cpp"
+        },
+        {
+          "chunk_id": "reminder_scheduler.cpp:structural:0004",
+          "text": "void ReminderScheduler::stop() {\n    { std::lock_guard<std::mutex> lock(mutex_); stopped_ = true; }\n    wake_.notify_all();\n    if (worker_.joinable()) worker_.join();\n}",
+          "language": "cpp"
+        }
+      ],
+      "retrieved_candidates_after_filter": [
+        {
+          "file": "reminder_scheduler.cpp",
+          "section": "ReminderScheduler::start",
+          "chunk_id": "reminder_scheduler.cpp:structural:0003",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.959309
+        },
+        {
+          "file": "reminder_scheduler.cpp",
+          "section": "ReminderScheduler::stop",
+          "chunk_id": "reminder_scheduler.cpp:structural:0004",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.917156
+        },
+        {
+          "file": "reminder_scheduler.cpp",
+          "section": "reminder_scheduler.cpp",
+          "chunk_id": "reminder_scheduler.cpp:structural:0001",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.905748
+        },
+        {
+          "file": "reminder_scheduler.h",
+          "section": "class ReminderScheduler",
+          "chunk_id": "reminder_scheduler.h:structural:0002",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.835303
+        }
+      ],
+      "backend_skipped_answer_generation": false,
+      "passed": true
+    },
+    {
+      "expected_behavior": "dont_know",
+      "expected_chunk_ids": [],
+      "expected_facts": [],
+      "expected_sources": [],
+      "id": 8,
+      "question": "What was the air temperature at the fictional station Aster-709 on Neptune at noon on 1 January 2057?",
+      "retrieval_query": "Aster-709 Neptune air temperature noon 1 January 2057",
+      "actual_answer": "Не знаю на основании доступных источников.\n\nУточните вопрос или добавьте подходящий документ.",
+      "actual_sources": [],
+      "actual_quotes": [],
+      "retrieved_candidates_after_filter": [],
+      "backend_skipped_answer_generation": true,
+      "passed": true
+    },
+    {
+      "expected_behavior": "dont_know",
+      "expected_chunk_ids": [],
+      "expected_facts": [],
+      "expected_sources": [],
+      "id": 9,
+      "question": "Who will win the individual Codeforces competition on 1 January 2045?",
+      "retrieval_query": "Codeforces individual competition 1 January 2045 future winner",
+      "actual_answer": "Не знаю на основании доступных источников.\n\nУточните вопрос или добавьте подходящий документ.",
+      "actual_sources": [],
+      "actual_quotes": [],
+      "retrieved_candidates_after_filter": [
+        {
+          "file": "codeforces_mcp_server/codeforces_client.py",
+          "section": "def normalize_upcoming",
+          "chunk_id": "codeforces_mcp_server/codeforces_client.py:structural:0003",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.580399
+        },
+        {
+          "file": "codeforces_mcp_server/codeforces_client.py",
+          "section": "def upcoming_contests",
+          "chunk_id": "codeforces_mcp_server/codeforces_client.py:structural:0006",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.56684
+        },
+        {
+          "file": "codeforces_mcp_server/contest_store.py",
+          "section": "class ContestStore",
+          "chunk_id": "codeforces_mcp_server/contest_store.py:structural:0003",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.54217
+        },
+        {
+          "file": "codeforces_mcp_server/codeforces_client.py",
+          "section": "class CodeforcesClient",
+          "chunk_id": "codeforces_mcp_server/codeforces_client.py:structural:0004",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0,
+          "relevance_score": 0.541994
+        }
+      ],
+      "backend_skipped_answer_generation": false,
+      "passed": true
+    },
+    {
+      "expected_behavior": "dont_know",
+      "expected_chunk_ids": [],
+      "expected_facts": [],
+      "expected_sources": [],
+      "id": 10,
+      "question": "What is the measured radius of the unobserved fictional exoplanet TOI-999999b?",
+      "retrieval_query": "TOI-999999b measured exoplanet radius unobserved",
+      "actual_answer": "Не знаю на основании доступных источников.\n\nУточните вопрос или добавьте подходящий документ.",
+      "actual_sources": [],
+      "actual_quotes": [],
+      "retrieved_candidates_after_filter": [],
+      "backend_skipped_answer_generation": true,
+      "passed": true
+    }
+  ],
+  "passed": 10,
+  "total": 10,
+  "recorded_at_utc": "2026-10-03T16:27:58.699440+00:00",
+  "retrieval_config": {
+    "pre_filter_top_k": 10,
+    "post_filter_top_k": 4,
+    "similarity_threshold": 0.45
+  },
+  "index_snapshot": {
+    "chunk_count": 596,
+    "project_chunks": 552,
+    "upload_chunks": 44
+  }
+}

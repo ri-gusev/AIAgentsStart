@@ -1,0 +1,210 @@
+{
+  "index_snapshot": {
+    "chunk_count": 596,
+    "project_chunks": 552,
+    "upload_chunks": 44
+  },
+  "questions": [
+    {
+      "id": 1,
+      "question": "Which local model and HTTP endpoint does DocumentIndexer::embedTexts use for bge-m3 embeddings?",
+      "retrieval_query": "DocumentIndexer::embedTexts bge-m3 Ollama embedding model HTTP endpoint",
+      "expected_facts": [
+        "bge-m3",
+        "/api/embed"
+      ],
+      "expected_chunk_ids": [
+        "document_indexer.cpp:structural:0027"
+      ],
+      "expected_behavior": "answer",
+      "expected_sources": [
+        {
+          "file": "document_indexer.cpp",
+          "section": "DocumentIndexer::validSearchRequest",
+          "chunk_id": "document_indexer.cpp:structural:0027",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "question": "How does ReminderScheduler::stop stop and join its worker thread?",
+      "retrieval_query": "ReminderScheduler::stop reminder_scheduler.cpp worker stopped wake_.notify_all worker_.join",
+      "expected_facts": [
+        "wake_.notify_all()",
+        "worker_.join()"
+      ],
+      "expected_chunk_ids": [
+        "reminder_scheduler.cpp:structural:0004"
+      ],
+      "expected_behavior": "answer",
+      "expected_sources": [
+        {
+          "file": "reminder_scheduler.cpp",
+          "section": "ReminderScheduler::stop",
+          "chunk_id": "reminder_scheduler.cpp:structural:0004",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "question": "Which Codeforces contest.list URL is stored in CONTEST_LIST_URL in codeforces_client.py?",
+      "retrieval_query": "codeforces_client.py CONTEST_LIST_URL Codeforces contest.list URL constant",
+      "expected_facts": [
+        "https://codeforces.com/api/contest.list?gym=false"
+      ],
+      "expected_chunk_ids": [
+        "codeforces_mcp_server/codeforces_client.py:structural:0001"
+      ],
+      "expected_behavior": "answer",
+      "expected_sources": [
+        {
+          "file": "codeforces_mcp_server/codeforces_client.py",
+          "section": "codeforces_client.py",
+          "chunk_id": "codeforces_mcp_server/codeforces_client.py:structural:0001",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "question": "What is the MCP tool-call limit in Agent::generateToolAssistedAnswer and what error is returned when it is exceeded?",
+      "retrieval_query": "Agent::generateToolAssistedAnswer agent.cpp MCP tool-call limit exceeded error",
+      "expected_facts": [
+        "Maximum of 8 MCP tool calls reached"
+      ],
+      "expected_chunk_ids": [
+        "agent.cpp:structural:0118"
+      ],
+      "expected_behavior": "answer",
+      "expected_sources": [
+        {
+          "file": "agent.cpp",
+          "section": "Agent::setMcpManager",
+          "chunk_id": "agent.cpp:structural:0118",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "question": "When does DocumentIndexer::structuralChunks flush a buffer after reaching maxChunk at a structural boundary?",
+      "retrieval_query": "DocumentIndexer::structuralChunks document_indexer.cpp maxChunk buffer.size boundary flush",
+      "expected_facts": [
+        "buffer.size() >= maxChunk && boundary"
+      ],
+      "expected_chunk_ids": [
+        "document_indexer.cpp:structural:0025"
+      ],
+      "expected_behavior": "answer",
+      "expected_sources": [
+        {
+          "file": "document_indexer.cpp",
+          "section": "DocumentIndexer::structuralChunks",
+          "chunk_id": "document_indexer.cpp:structural:0025",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "question": "In the uploaded ComplexNumbers chapter, what year is given for Cardano's Ars Magna?",
+      "retrieval_query": "Cardano Ars Magna publication year ComplexNumbers chapter",
+      "expected_facts": [
+        "1545"
+      ],
+      "expected_chunk_ids": [
+        "upload:1:page:1:structural:0001"
+      ],
+      "expected_behavior": "answer",
+      "expected_sources": [
+        {
+          "file": "03_ComplexNumbers (1).pdf",
+          "section": "03_ComplexNumbers (1).pdf",
+          "chunk_id": "upload:1:page:1:structural:0001",
+          "source_type": "upload",
+          "page": 1,
+          "line_start": 1,
+          "line_end": 35
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "question": "How do ReminderScheduler::start and ReminderScheduler::stop respectively create and join the worker thread?",
+      "retrieval_query": "ReminderScheduler::start ReminderScheduler::stop reminder_scheduler.cpp std::thread worker_.join",
+      "expected_facts": [
+        "std::thread",
+        "worker_.join()"
+      ],
+      "expected_chunk_ids": [
+        "reminder_scheduler.cpp:structural:0003",
+        "reminder_scheduler.cpp:structural:0004"
+      ],
+      "expected_behavior": "answer",
+      "expected_sources": [
+        {
+          "file": "reminder_scheduler.cpp",
+          "section": "ReminderScheduler::start",
+          "chunk_id": "reminder_scheduler.cpp:structural:0003",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0
+        },
+        {
+          "file": "reminder_scheduler.cpp",
+          "section": "ReminderScheduler::stop",
+          "chunk_id": "reminder_scheduler.cpp:structural:0004",
+          "source_type": "project",
+          "page": 0,
+          "line_start": 0,
+          "line_end": 0
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "question": "What was the air temperature at the fictional station Aster-709 on Neptune at noon on 1 January 2057?",
+      "retrieval_query": "Aster-709 Neptune air temperature noon 1 January 2057",
+      "expected_facts": [],
+      "expected_chunk_ids": [],
+      "expected_behavior": "dont_know",
+      "expected_sources": []
+    },
+    {
+      "id": 9,
+      "question": "Who will win the individual Codeforces competition on 1 January 2045?",
+      "retrieval_query": "Codeforces individual competition 1 January 2045 future winner",
+      "expected_facts": [],
+      "expected_chunk_ids": [],
+      "expected_behavior": "dont_know",
+      "expected_sources": []
+    },
+    {
+      "id": 10,
+      "question": "What is the measured radius of the unobserved fictional exoplanet TOI-999999b?",
+      "retrieval_query": "TOI-999999b measured exoplanet radius unobserved",
+      "expected_facts": [],
+      "expected_chunk_ids": [],
+      "expected_behavior": "dont_know",
+      "expected_sources": []
+    }
+  ]
+}
