@@ -38,6 +38,8 @@ public:
         std::string file;
         std::string section;
         std::string chunkId;
+        std::string sourceType;
+        int page=0, lineStart=0, lineEnd=0;
     };
 
     struct ChatMessage {

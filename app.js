@@ -7,6 +7,13 @@ const chatNotice = document.querySelector('#chatNotice');
 const ragToggle = document.querySelector('#ragToggle');
 const ragReindex = document.querySelector('#ragReindex');
 const ragStatus = document.querySelector('#ragStatus');
+const ragUpload = document.querySelector('#ragUpload');
+const ragFileInput = document.querySelector('#ragFileInput');
+const ragUploads = document.querySelector('#ragUploads');
+const ragFileList = document.querySelector('#ragFileList');
+let ragUploadPending = false;
+let ragUploadsLoading = false;
+let ragUploadsTimer;
 let ragEnabled = false;
 let ragIndexing = false;
 const chatSelect = document.querySelector('#chatSelect');
@@ -362,6 +369,7 @@ function updateControlState() {
   const busy = requestPending;
   ragToggle.disabled = busy;
   ragReindex.disabled = busy || ragIndexing;
+  ragUpload.disabled = busy || ragUploadPending;
   const taskLocked = activeChatMode === 'task' && (currentTask.state === 'PAUSED' || currentTask.state === 'DONE');
   sendButton.disabled = busy || !activeChatId || taskLocked;
   input.disabled = busy || taskLocked;
@@ -996,7 +1004,9 @@ function renderRagSources(message, sources) {
   const list = document.createElement('ul');
   const seen = new Set();
   sources.forEach((source) => {
-    const label = String(source.file || '') + ' — ' + String(source.section || 'Общий раздел');
+    const location = source.page > 0 ? ' · стр. ' + source.page
+      : source.line_start > 0 ? ' · строки ' + source.line_start + '–' + source.line_end : '';
+    const label = String(source.file || '') + ' — ' + String(source.section || 'Общий раздел') + location;
     if (seen.has(label)) return;
     seen.add(label);
     const item = document.createElement('li');
@@ -1045,7 +1055,7 @@ ragToggle.addEventListener('click', () => {
   ragEnabled = !ragEnabled;
   ragToggle.textContent = ragEnabled ? 'RAG ON' : 'RAG OFF';
   ragToggle.setAttribute('aria-checked', String(ragEnabled));
-  if (!ragIndexing) showRagStatus(ragEnabled ? 'Ответы с контекстом исходников проекта.' : '');
+  if (!ragIndexing) showRagStatus(ragEnabled ? 'Ответы с контекстом проекта и загруженных документов.' : '');
 });
 
 ragReindex.addEventListener('click', async () => {
@@ -1065,3 +1075,55 @@ ragReindex.addEventListener('click', async () => {
     updateControlState();
   }
 });
+
+async function refreshRagUploads() {
+  if (ragUploadsLoading) return;
+  ragUploadsLoading = true;
+  clearTimeout(ragUploadsTimer);
+  try {
+    const response = await fetch('/api/rag/uploads', { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || 'Статусы документов недоступны.');
+    const files = Array.isArray(data.files) ? data.files : [];
+    ragUploads.hidden = !files.length;
+    ragFileList.replaceChildren();
+    const labels = { uploaded: 'загружен', indexing: 'индексируется', indexed: 'проиндексирован', error: 'ошибка' };
+    files.forEach((file) => {
+      const item = document.createElement('li');
+      item.dataset.status = file.status;
+      item.textContent = file.name + ' — ' + (labels[file.status] || file.status) + (file.error ? ': ' + file.error : '');
+      ragFileList.append(item);
+    });
+    if (files.some((file) => file.status === 'uploaded' || file.status === 'indexing'))
+      ragUploadsTimer = setTimeout(refreshRagUploads, 1000);
+  } catch (error) {
+    showRagStatus(error.message, true);
+  } finally { ragUploadsLoading = false; }
+}
+
+ragUpload.addEventListener('click', () => ragFileInput.click());
+ragFileInput.addEventListener('change', async () => {
+  const files = Array.from(ragFileInput.files || []);
+  ragFileInput.value = '';
+  if (!files.length || ragUploadPending) return;
+  ragUploadPending = true;
+  updateControlState();
+  ragUploads.open = true;
+  try {
+    for (const file of files) {
+      if (!/\.(txt|md|pdf|docx)$/i.test(file.name) || !file.size || file.size > 10 * 1024 * 1024) {
+        showRagStatus(file.name + ': поддерживаются TXT, MD, PDF, DOCX до 10 МБ.', true);
+        continue;
+      }
+      const response = await fetch('/api/rag/upload', {
+        method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) }, body: file
+      });
+      const data = await response.json();
+      if (!response.ok) { showRagStatus(file.name + ': ' + (data.error || 'Ошибка загрузки.'), true); continue; }
+      await refreshRagUploads();
+    }
+  } catch {
+    showRagStatus('Не удалось загрузить документ. Проверьте соединение с backend.', true);
+  } finally { ragUploadPending = false; updateControlState(); }
+});
+refreshRagUploads();

@@ -76,6 +76,14 @@ input, select { width: 100%; min-width: 0; color: var(--ink); border: 1px solid 
 .rag-sources { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .rag-sources summary { cursor: pointer; }
 .rag-sources ul { margin: 7px 0 0; padding-left: 18px; }
+.rag-controls { flex-wrap: wrap; }
+.question-title-row { flex-wrap: wrap; }
+.rag-uploads { margin-top: 8px; color: var(--muted); font-size: 11px; }
+.rag-uploads summary { cursor: pointer; }
+.rag-uploads ul { margin: 7px 0 0; padding: 0; list-style: none; max-height: 140px; overflow-y: auto; }
+.rag-uploads li { padding: 4px 0; overflow-wrap: anywhere; }
+.rag-uploads [data-status="error"] { color: #9f241b; }
+.rag-uploads[hidden], #ragFileInput[hidden] { display: none; }
 .task-state-panel[hidden], .mcp-panel[hidden] { display: none; }
 .new-chat-form button, .chat-delete-button { width: 100%; }
 .secondary-button { flex-shrink: 0; padding: 9px 12px; color: var(--green); border: 1px solid #c6cdeb; border-radius: 10px; background: white; font-size: 12px; font-weight: 700; }
@@ -304,4 +312,3 @@ textarea::placeholder, input::placeholder { color: #929ab3; }
   .task-state-actions { margin-top: 8px; padding-top: 8px; }
   .composer-panel { padding-top: 8px; }
 }
-

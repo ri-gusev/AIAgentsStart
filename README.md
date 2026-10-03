@@ -8,4 +8,4 @@ The C++ backend serves two chat modes: Tasks uses the task state machine; Assist
 
 ## Stack
 
-C++17, CMake, libcurl, SQLite, HTML, CSS, JavaScript, Ollama `/api/embed` (`bge-m3` by default).
+C++17, CMake, libcurl, SQLite, HTML, CSS, JavaScript, Ollama `/api/embed` (`bge-m3`), Python + pypdf for local TXT/MD/PDF/DOCX extraction. Uploaded files and their status live in `document_index.db`; project reindexing preserves them. PDF requires a text layer (no OCR).

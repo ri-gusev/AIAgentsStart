@@ -61,10 +61,13 @@
               <h2 id="activeChatName">Чат</h2>
               <div class="rag-controls" role="group" aria-label="Поиск по проекту">
                 <button id="ragToggle" class="secondary-button" type="button" role="switch" aria-checked="false">RAG OFF</button>
+                <button id="ragUpload" class="rag-reindex" type="button" title="Добавить TXT, MD, PDF или DOCX для RAG">+ Файл</button>
+                <input id="ragFileInput" type="file" accept=".txt,.md,.pdf,.docx" multiple hidden>
                 <button id="ragReindex" class="rag-reindex" type="button" title="Перестроить индекс исходников проекта">Reindex</button>
               </div>
             </div>
             <p id="ragStatus" class="rag-status" role="status" hidden></p>
+            <details id="ragUploads" class="rag-uploads" hidden><summary>Документы RAG</summary><ul id="ragFileList" aria-live="polite"></ul></details>
             <p id="memoryDescription">У каждого чата свой диалог и рабочая память. Долговременные факты общие.</p>
           </div>
         </section>

@@ -273,8 +273,10 @@ std::string buildAgentStateFields(const Agent& agent) {
         std::string sources = "[";
         for (const auto& source : message.ragSources) {
             if (sources.size() > 1) sources += ',';
-            sources += "{\"file\":\"" + jsonEscape(source.file) + "\",\"section\":\"" +
-                jsonEscape(source.section) + "\",\"chunk_id\":\"" + jsonEscape(source.chunkId) + "\"}";
+            sources += "{\"file\":\"" + jsonEscape(source.file) + "\",\"section\":\"" + jsonEscape(source.section) +
+                "\",\"chunk_id\":\"" + jsonEscape(source.chunkId) + "\",\"source_type\":\"" + jsonEscape(source.sourceType) +
+                "\",\"page\":" + std::to_string(source.page) + ",\"line_start\":" + std::to_string(source.lineStart) +
+                ",\"line_end\":" + std::to_string(source.lineEnd) + "}";
         }
         sources += ']';
         conversationJson += "{\"id\":\"" + jsonEscape(message.id) +
@@ -400,7 +402,7 @@ std::string buildReminderStateJson(const ReminderStore& store, const std::string
     return result + "],\"error\":\"" + jsonEscape(error) + "\"}";
 }
 
-bool parseContentLength(const std::string& text, size_t& value) {
+bool parseContentLength(const std::string& text, size_t& value, size_t limit = kMaxHttpBodyBytes) {
     size_t position = 0;
     while (position < text.size() &&
            std::isspace(static_cast<unsigned char>(text[position]))) ++position;
@@ -417,7 +419,7 @@ bool parseContentLength(const std::string& text, size_t& value) {
     }
     while (position < text.size() &&
            std::isspace(static_cast<unsigned char>(text[position]))) ++position;
-    if (position != text.size() || parsed > kMaxHttpBodyBytes) return false;
+    if (position != text.size() || parsed > limit) return false;
     value = parsed;
     return true;
 }
@@ -466,7 +468,7 @@ bool readHttpRequest(net::Socket client, HttpRequest& request) {
         value = begin == std::string::npos ? "" : value.substr(begin, end - begin + 1);
         request.headers[name] = value;
         if (name == "content-length" &&
-            !parseContentLength(line.substr(colon + 1), contentLength)) return false;
+            !parseContentLength(line.substr(colon + 1), contentLength, request.path == "/api/rag/upload" ? 10 * 1024 * 1024 : kMaxHttpBodyBytes)) return false;
     }
     request.body = raw.substr(headerEnd + 4);
     while (request.body.size() < contentLength) {
@@ -728,8 +730,11 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
                                             "\",\"title\":\"" + jsonEscape(hit.chunk.title) +
                                             "\",\"section\":\"" + jsonEscape(hit.chunk.section) +
                                             "\",\"chunk_id\":\"" + jsonEscape(hit.chunk.chunkId) +
-                                            "\",\"content\":\"" + jsonEscape(hit.chunk.content.substr(0, end)) + "\"}";
-                                        sources.push_back({hit.chunk.file, hit.chunk.section, hit.chunk.chunkId});
+                                            "\",\"source_type\":\"" + jsonEscape(hit.chunk.sourceType) + "\",\"page\":" + std::to_string(hit.chunk.page) +
+                                            ",\"line_start\":" + std::to_string(hit.chunk.lineStart) + ",\"line_end\":" + std::to_string(hit.chunk.lineEnd) +
+                                            ",\"content\":\"" + jsonEscape(hit.chunk.content.substr(0, end)) + "\"}";
+                                        sources.push_back({hit.chunk.file, hit.chunk.section, hit.chunk.chunkId, hit.chunk.sourceType,
+                                            hit.chunk.page, hit.chunk.lineStart, hit.chunk.lineEnd});
                                     }
                                     context += "]}";
                                 }
@@ -863,6 +868,34 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
                                      jsonEscape(error) + "\"," +
                                      buildAgentStateFields(agent) + "}");
             }
+        } else if (request.method == "GET" && request.path == "/api/rag/uploads") {
+            sendHttpResponse(client, 200, "application/json", documentIndexer.uploadsJson());
+        } else if (request.method == "POST" && request.path == "/api/rag/upload") {
+            std::string name, id, error;
+            const auto encoded = request.headers["x-file-name"];
+            for (size_t i = 0; i < encoded.size() && error.empty(); ++i) {
+                if (encoded[i] != '%') name += encoded[i];
+                else if (i + 2 >= encoded.size() || !std::isxdigit(static_cast<unsigned char>(encoded[i+1])) ||
+                         !std::isxdigit(static_cast<unsigned char>(encoded[i+2]))) error = "Invalid encoded file name";
+                else { name += static_cast<char>(std::stoi(encoded.substr(i + 1, 2), nullptr, 16)); i += 2; }
+            }
+            const bool accepted = error.empty() && documentIndexer.upload(name, request.body, id, error);
+            sendHttpResponse(client, accepted ? 202 : 400, "application/json",
+                accepted ? "{\"id\":\"" + jsonEscape(id) + "\",\"status\":\"uploaded\"}" : "{\"error\":\"" + jsonEscape(error) + "\"}");
+        } else if (request.method == "GET" && request.path == "/api/rag/uploads") {
+            sendHttpResponse(client, 200, "application/json", documentIndexer.uploadsJson());
+        } else if (request.method == "POST" && request.path == "/api/rag/upload") {
+            std::string name, id, error;
+            const auto encoded = request.headers["x-file-name"];
+            for (size_t i = 0; i < encoded.size() && error.empty(); ++i) {
+                if (encoded[i] != '%') name += encoded[i];
+                else if (i + 2 >= encoded.size() || !std::isxdigit(static_cast<unsigned char>(encoded[i+1])) ||
+                         !std::isxdigit(static_cast<unsigned char>(encoded[i+2]))) error = "Invalid encoded file name";
+                else { name += static_cast<char>(std::stoi(encoded.substr(i + 1, 2), nullptr, 16)); i += 2; }
+            }
+            const bool accepted = error.empty() && documentIndexer.upload(name, request.body, id, error);
+            sendHttpResponse(client, accepted ? 202 : 400, "application/json",
+                accepted ? "{\"id\":\"" + jsonEscape(id) + "\",\"status\":\"uploaded\"}" : "{\"error\":\"" + jsonEscape(error) + "\"}");
         } else if (request.method == "GET" && request.path == "/api/rag/status") {
             sendHttpResponse(client, 200, "application/json", documentIndexer.statusJson());
         } else if (request.method == "POST" && request.path == "/api/rag/reindex") {

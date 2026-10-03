@@ -7,6 +7,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(CURL REQUIRED)
 find_package(SQLite3 REQUIRED)
 find_package(Threads REQUIRED)
+find_program(RAG_PYTHON NAMES python.exe python3 python
+    PATHS "${CMAKE_CURRENT_SOURCE_DIR}/.venv-rag/bin" "${CMAKE_CURRENT_SOURCE_DIR}/.venv-rag/Scripts" NO_DEFAULT_PATH)
+find_program(RAG_PYTHON NAMES python.exe python3 python)
+if(NOT RAG_PYTHON)
+    message(FATAL_ERROR "Python is required for RAG document extraction")
+endif()
+add_compile_definitions(RAG_PYTHON="${RAG_PYTHON}" RAG_EXTRACTOR="${CMAKE_CURRENT_SOURCE_DIR}/rag_extract.py")
+find_program(RAG_PYTHON NAMES python.exe python3 python
+    PATHS "${CMAKE_CURRENT_SOURCE_DIR}/.venv-rag/bin" "${CMAKE_CURRENT_SOURCE_DIR}/.venv-rag/Scripts" NO_DEFAULT_PATH)
+find_program(RAG_PYTHON NAMES python.exe python3 python)
+if(NOT RAG_PYTHON)
+    message(FATAL_ERROR "Python is required for RAG document extraction")
+endif()
+add_compile_definitions(RAG_PYTHON="${RAG_PYTHON}" RAG_EXTRACTOR="${CMAKE_CURRENT_SOURCE_DIR}/rag_extract.py")
 
 # CMake 4 exposes the modern SQLite3::SQLite3 target, while older supported
 # CMake releases used SQLite::SQLite3.
