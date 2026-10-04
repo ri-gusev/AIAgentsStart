@@ -157,6 +157,10 @@ input, select { width: 100%; min-width: 0; color: var(--ink); border: 1px solid 
 .message-content.loading { color: var(--muted); }
 .chat-message { min-width: 0; }
 .message-content.markdown-body { white-space: normal; min-width: 0; }
+.markdown-body .md-math-inline { white-space: nowrap; }
+.markdown-body .katex { font-size: 1.1em; text-indent: 0; overflow-wrap: normal; word-break: normal; }
+.markdown-body .md-math-display { display: block; max-width: 100%; margin: .8em 0; padding: .5em .6em; overflow-x: auto; overflow-y: hidden; border: 1px solid var(--line); border-radius: 10px; background: rgba(68,87,196,.035); }
+.markdown-body .md-math-display .katex-display { width: max-content; min-width: 100%; margin: .25em 0; }
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }
 .markdown-body p { margin: 0 0 .85em; }

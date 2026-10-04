@@ -933,6 +933,32 @@ int runWebServer(Agent& agent, McpClient& mcpClient, McpManager* manager) {
             else if (request.method == "GET" && request.path == "/app.js") { fileName = "app.js"; contentType = "application/javascript"; }
             else if (request.method == "GET" && request.path == "/reminders.js") { fileName = "reminders.js"; contentType = "application/javascript"; }
             else if (request.method == "GET" && request.path == "/chat_markdown.js") { fileName = "chat_markdown.js"; contentType = "application/javascript"; }
+            else if (request.method == "GET" && request.path.rfind("/vendor/chat-math/", 0) == 0) {
+                const std::string asset = request.path.substr(18);
+                if (asset == "katex.min.js") { fileName = "vendor/chat-math/" + asset; contentType = "application/javascript"; }
+                else if (asset == "katex.min.css") { fileName = "vendor/chat-math/" + asset; contentType = "text/css"; }
+                else if (asset.rfind("fonts/", 0) == 0) {
+                    static const std::vector<std::string> fonts = {
+                        "KaTeX_AMS-Regular", "KaTeX_Caligraphic-Bold", "KaTeX_Caligraphic-Regular",
+                        "KaTeX_Fraktur-Bold", "KaTeX_Fraktur-Regular", "KaTeX_Main-Bold",
+                        "KaTeX_Main-BoldItalic", "KaTeX_Main-Italic", "KaTeX_Main-Regular",
+                        "KaTeX_Math-BoldItalic", "KaTeX_Math-Italic", "KaTeX_SansSerif-Bold",
+                        "KaTeX_SansSerif-Italic", "KaTeX_SansSerif-Regular", "KaTeX_Script-Regular",
+                        "KaTeX_Size1-Regular", "KaTeX_Size2-Regular", "KaTeX_Size3-Regular",
+                        "KaTeX_Size4-Regular", "KaTeX_Typewriter-Regular"
+                    };
+                    const size_t extensionAt = asset.rfind('.');
+                    if (extensionAt != std::string::npos) {
+                        const std::string font = asset.substr(6, extensionAt - 6);
+                        const std::string extension = asset.substr(extensionAt);
+                        if (std::find(fonts.begin(), fonts.end(), font) != fonts.end() &&
+                            (extension == ".woff2" || extension == ".woff" || extension == ".ttf")) {
+                            fileName = "vendor/chat-math/" + asset;
+                            contentType = extension == ".woff2" ? "font/woff2" : extension == ".woff" ? "font/woff" : "font/ttf";
+                        }
+                    }
+                }
+            }
             else if (request.method == "GET" && request.path.rfind("/vendor/chat-markdown/", 0) == 0) {
                 static const std::vector<std::string> assets = {"async_hooks.mjs", "buffer.mjs", "core.mjs", "dark-plus.mjs", "engine.mjs", "events.mjs", "lang-c.mjs", "lang-cmake.mjs", "lang-cpp.mjs", "lang-csharp.mjs", "lang-css.mjs", "lang-diff.mjs", "lang-dockerfile.mjs", "lang-go.mjs", "lang-html.mjs", "lang-java.mjs", "lang-javascript.mjs", "lang-json.mjs", "lang-jsonc.mjs", "lang-jsx.mjs", "lang-markdown.mjs", "lang-powershell.mjs", "lang-python.mjs", "lang-rust.mjs", "lang-shellscript.mjs", "lang-sql.mjs", "lang-toml.mjs", "lang-tsx.mjs", "lang-typescript.mjs", "lang-xml.mjs", "lang-yaml.mjs", "markdown-it.js", "process.mjs", "tty.mjs", "wasm.mjs"};
                 const std::string asset = request.path.substr(22);

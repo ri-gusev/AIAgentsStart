@@ -2,6 +2,66 @@
   'use strict';
   const markdown = window.markdownit({ html: false, linkify: true, typographer: false });
   const escape = markdown.utils.escapeHtml;
+  // Parse TeX before Markdown consumes backslash escapes or underscores.
+  // Inline/fenced code keeps its existing parser and is never interpreted as math.
+  function math(state, silent) {
+    const start = state.pos;
+    const source = state.src;
+    let opening, closing, display = false, legacy = false;
+    if (source.startsWith('\\[', start)) {
+      opening = '\\['; closing = '\\]'; display = true;
+    } else if (source.startsWith('\\(', start)) {
+      opening = '\\('; closing = '\\)';
+    } else if (source.startsWith('$$', start)) {
+      opening = closing = '$$'; display = true;
+    } else if (source[start] === '$') {
+      if (source[start - 1] === '$' || /\s/.test(source[start + 1] || ' ')) return false;
+      opening = closing = '$';
+    } else if (source[start] === '[') {
+      // Some model responses use bare brackets instead of \[ ... \].
+      // Only accept recognizable TeX, leaving ordinary brackets and links alone.
+      opening = '['; closing = ']'; display = true; legacy = true;
+    } else return false;
+
+    const contentStart = start + opening.length;
+    const limit = Math.min(state.posMax, contentStart + 16000);
+    let end = contentStart;
+    for (; end < limit; end++) {
+      if (!source.startsWith(closing, end)) continue;
+      let slashes = 0;
+      for (let previous = end - 1; previous >= contentStart && source[previous] === '\\'; previous--) slashes++;
+      if (slashes % 2) continue;
+      if (closing === '$' && (source[end + 1] === '$' || /\s/.test(source[end - 1]) || /\d/.test(source[end + 1] || ''))) continue;
+      break;
+    }
+    if (end >= limit) return false;
+    const content = source.slice(contentStart, end);
+    if (!content.trim()) return false;
+    if (legacy && (!/\\(?:frac|dfrac|tfrac|sqrt|sin|cos|tan|log|ln|exp|sum|prod|int|lim|begin|alpha|beta|gamma|delta|theta|varphi|phi|pi|omega|qquad|cdot|times)\b/.test(content) ||
+        /[([]/.test(source[end + 1] || '') || source[end + 1] === ':')) return false;
+    if (!silent) {
+      const token = state.push('math', '', 0);
+      token.content = content;
+      token.meta = { display, original: source.slice(start, end + closing.length) };
+    }
+    state.pos = end + closing.length;
+    return true;
+  }
+  markdown.inline.ruler.before('escape', 'math', math);
+  markdown.renderer.rules.math = (tokens, index) => {
+    const token = tokens[index];
+    try {
+      const html = window.katex.renderToString(token.content, {
+        displayMode: token.meta.display, output: 'htmlAndMathml',
+        throwOnError: true, trust: false, strict: 'ignore',
+        maxExpand: 1000, maxSize: 20, macros: {}
+      });
+      return '<span class="' + (token.meta.display ? 'md-math-display' : 'md-math-inline') + '">' + html + '</span>';
+    } catch {
+      // A malformed formula must not hide the rest of the assistant response.
+      return escape(token.meta.original);
+    }
+  };
   const aliases = {
     'c++': 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', 'c#': 'csharp', cs: 'csharp',
     py: 'python', js: 'javascript', ts: 'typescript', sh: 'shellscript', bash: 'shellscript',
